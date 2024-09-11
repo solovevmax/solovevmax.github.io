@@ -1,0 +1,58 @@
+html, body {
+    background-color: skyblue;
+    font-family: Trebuchet MS, Arial, sans-serif;
+    font-size: 1.25vw;
+    margin: 10px;
+    padding: 0px;
+}
+
+body > header {
+    background-color: darkcyan;
+    color: white;  
+    text-align: center;
+    font-family: "Playwrite CU", Trebuchet MS, Arial, sans-serif;
+}
+
+body > header > nav > ul > li > a {
+    text-decoration: none;
+    color: white;
+    border: 3px solid black;
+    border-radius: 15%;
+    padding:5px; 
+    font-family: 'Trebuchet MS', 'Lucida Sans Unicode', 'Lucida Grande', 'Lucida Sans', Arial, sans-serif
+}
+
+#bear {
+    display: block;
+    width: 200px;
+    height: 300px;
+    margin: auto;
+    border-radius: 5%;
+}
+
+blockquote > a {
+    display: inline-block;
+}
+
+body > main > article {
+    width: 70%;
+    margin: auto;
+}
+
+#quote {
+    width: 35%;
+    margin: auto;
+}
+
+form {
+    text-align: center;
+}
+
+h2 {
+    text-align: center;
+}
+
+#footer > div > li > a {
+    display: flex;
+    text-decoration: none;
+}
