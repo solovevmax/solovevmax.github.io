@@ -1,55 +1,59 @@
 # Herb Garden — local prototype
 
-A local-only monitoring + auto-watering app for a self-watering smart herb
-garden. Built for **basil** first and structured so more herbs can be added.
-Starts with mock data; designed to swap to live USB serial input from an
-Arduino Nano RP2040 Connect later, with no architectural changes.
-
-## Stack
-
-- **Python 3** + **Flask** (serves UI + small JSON API)
-- **pyserial** (for the Arduino swap; not used in mock mode)
-- Vanilla HTML / CSS / JS — no build step
-- JSON files on disk for settings + event log (no DB)
+A calm, mobile-first prototype for a self-watering smart herb garden.
+**Pure static site** — no backend, no build step. Open it locally now;
+later, host it as a static page (e.g. GitHub Pages) or connect a real
+Arduino Nano RP2040 Connect over USB serial from the browser.
 
 ## Run it locally
 
+The simplest path that works on every browser:
+
 ```bash
 cd herb-garden
-python3 -m venv .venv
-source .venv/bin/activate           # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python app.py
+python3 -m http.server 8000
 ```
 
-Open <http://127.0.0.1:5000>. The "Demo Data" badge in the header confirms
-mock mode. Watch the moisture metric drift down — when it crosses the
-threshold, an auto-watering fires, the gauge climbs, and a watering event
-appears in **History**.
+Then open <http://localhost:8000>.
 
-## Switch to live Arduino serial
+> A local server is needed because the JS files are loaded as separate
+> scripts and Web Serial requires a secure context (localhost counts as
+> secure). Any static server works — `npx serve`, `php -S`, etc.
 
-1. Plug in the Arduino over USB. Identify the port:
-   - macOS/Linux: `ls /dev/tty.* /dev/ttyACM*` (typically `/dev/ttyACM0`)
-   - Windows: Device Manager → "COMx"
-2. In **Settings**:
-   - Set **Data source** to `Live serial (Arduino)`
-   - Set **Serial port** to your port (e.g. `/dev/ttyACM0` or `COM3`)
-   - Save. The connection swap is hot — no restart.
-3. The Arduino must emit one JSON object per line at 115200 baud (see
-   schema below). When real data starts flowing the "Demo Data" badge
-   disappears and the connection badge turns green.
+## Test Data (preview without an Arduino)
 
-## Serial schema (one JSON object per line)
+There's a **Test** dropdown in the top-right at all times. Switch between:
 
-**Arduino → App** (~1 Hz):
+- **Live demo** — drifting mock data; moisture trickles down, auto-water
+  fires when it crosses the threshold, the gauge animates.
+- **Healthy basil** — fixed thriving readings (score ~95+).
+- **Dry soil — needs water** — moisture below threshold; click *Water now*
+  or just wait for auto-water to kick in.
+- **Low reservoir** — reservoir at ~12%; triggers the refill alert and
+  blocks auto-watering.
+
+Every section (Home, Live Data, History, Plant Profile, Settings, Alerts)
+updates from the same source, so the whole UI previews accurately.
+
+## Switch to a live Arduino
+
+1. Open **Settings → Connection** and set *Data source* to
+   **Live serial (Arduino)**.
+2. Click **Connect Arduino**. The browser prompts you to pick the serial
+   port. Use Chrome or Edge — Firefox/Safari don't yet support Web Serial.
+3. The Arduino must emit one JSON object per line at 115200 baud. The
+   demo banner disappears and the connection chip turns green.
+
+## Serial schema
+
+**Arduino → app** (one JSON object per line, ~1 Hz):
 ```json
 {"timestamp":"2026-05-17T12:34:56Z","moisture":42.3,"temperature":22.1,
  "humidity":55,"ph":6.5,"light_lux":12000,"reservoir_level":80,
  "pump_event":null}
 ```
 
-**Arduino → App** when pump finishes:
+**Arduino → app** when pump completes (optional echo):
 ```json
 {"timestamp":"...","pump_event":"completed","moisture":...}
 ```
@@ -59,74 +63,75 @@ appears in **History**.
 {"cmd":"water","duration_ms":3000}
 ```
 
-Any missing field is treated as `null` and rendered as "— no data —".
-Impossible values (e.g. moisture = -5, temp = 999) are rejected.
+Missing fields → `null` and rendered as "— no data —". Out-of-range
+values (e.g. moisture = -5) are silently rejected. No frame within 10 s
+→ stale-data alert + the connection chip turns amber.
 
-## File map
+## File structure
 
 ```
 herb-garden/
-├── app.py                     # Flask routes + bootstrap
-├── herb_garden/
-│   ├── plants.py              # Plant reference DB
-│   ├── health.py              # Plant Health formula
-│   ├── data_sources.py        # MockDataSource + SerialDataSource
-│   ├── controller.py          # Auto-water, alerts, snapshot for UI
-│   ├── events.py              # Append-only event log (JSON)
-│   ├── validation.py          # Sanity checks for sensor values
-│   └── config.py              # Settings persisted to JSON
-├── static/                    # index.html, styles.css, app.js
-└── data/                      # created at runtime: settings.json, events.json
+├── index.html
+├── styles.css
+├── js/
+│   ├── plants.js      # Plant DB (basil) + Test Data SCENARIOS
+│   ├── health.js      # Plant Health formula
+│   ├── sources.js     # ScenarioSource | LiveMockSource | SerialSource
+│   ├── storage.js     # localStorage helpers (settings + events)
+│   └── app.js         # Controller + UI rendering + tab nav
+└── README.md
 ```
-
-## Adding a new herb
-
-Open `herb_garden/plants.py` and append a dict to `PLANTS`:
-
-```python
-"mint": {
-    "id": "mint", "common_name": "Mint", "scientific_name": "Mentha",
-    "image": "basil",  # or add a new SVG in static/app.js
-    "notes": "Cool-tolerant; loves moisture; partial sun OK.",
-    "ranges": {
-        "moisture_pct":  {"ideal": [50, 80],   "ok": [35, 90]},
-        "temperature_c": {"ideal": [15, 24],   "ok": [10, 30]},
-        ...
-    },
-    "weights": { "moisture_pct": 0.35, ... },          # must sum to 1.0
-    "moisture_threshold_pct": 45,
-    "watering_cooldown_s": 600,
-}
-```
-
-The Settings dropdown picks it up automatically.
 
 ## Plant Health formula
 
-For each metric `m`, a sub-score `s_m` in 0–100 is computed:
+For each metric `m` with value `v` and ranges `{ideal, ok}`:
 
-- `null` → 0 (and labelled "Missing")
-- inside `ideal` range → 100
-- inside `ok` range but outside `ideal` → linear taper 100 → 50 across the gap
-- outside `ok` range → linear taper 50 → 0 across an equal-width buffer, clamped
+- `null` → **excluded from the average** (weight is redistributed)
+- inside `ideal` → 100
+- inside `ok` but outside `ideal` → linear 100 → 50 across the gap
+- outside `ok` → linear 50 → 0 across an equal-width buffer, clamped
 
 Reservoir sub-score = `clamp(level%, 0, 100)`.
 
-`Plant Health = round(Σ weight_m × s_m / Σ weight_m)`, clamped to 1–100.
+```
+PlantHealth = round( Σ wₘ · sₘ / Σ wₘ )  →  clamp 1..100
+```
 
-The **explanation** below the gauge is the metric with the lowest sub-score
-("Low moisture", "Low light", "Reservoir low"). If every sub-score ≥ 80 it
-reads "Thriving"; if all ≥ 60, "Doing well".
+Basil weights: moisture **30%**, temperature **20%**, light **20%**,
+humidity **10%**, pH **10%**, reservoir **10%**.
+
+The line under the gauge surfaces the worst sub-score in plain English:
+"Low moisture", "High temperature", "Reservoir low", etc.
+
+## Adding a new herb
+
+Open `js/plants.js` and add an entry to `PLANTS`:
+
+```js
+mint: {
+  id: 'mint', common_name: 'Mint', scientific_name: 'Mentha',
+  illustration: 'basil',          // or add a new SVG to ILLUSTRATIONS
+  notes: 'Cool-tolerant; loves moisture; partial sun is fine.',
+  ranges: {
+    moisture_pct:  { ideal: [50, 80], ok: [35, 90] },
+    temperature_c: { ideal: [15, 24], ok: [10, 30] },
+    // ...
+  },
+  weights: { /* must sum to 1.0 */ },
+  moisture_threshold_pct: 45,
+  watering_cooldown_s: 600,
+}
+```
 
 ## What's mocked vs. real
 
-| Concern              | Mock                            | Live (later)                          |
-|----------------------|---------------------------------|---------------------------------------|
-| Sensor readings      | `MockDataSource` synthesizes    | `SerialDataSource` reads JSON lines   |
-| Watering command     | Mock bumps moisture internally  | App sends `{"cmd":"water",...}` over serial |
-| Pump completion event| Synthesized after command       | Arduino echoes `"pump_event":"completed"`  |
-| Connection badge     | Always green ("Demo Data" chip) | Green when port is open and data fresh|
-| Stale-data alert     | Same logic                      | Same logic                            |
+| Concern             | Mock / Test                          | Live (later)                         |
+|---------------------|--------------------------------------|--------------------------------------|
+| Sensor readings     | `ScenarioSource` / `LiveMockSource`  | `SerialSource` reads JSON lines      |
+| Water command       | Mock bumps moisture internally        | `{"cmd":"water"}` written to USB     |
+| Completion event    | Synthesized after command            | Arduino echoes `pump_event:"completed"` |
+| Connection chip     | Always green ("Demo (mock)" label)    | Green when port open and data fresh  |
+| Stale-data warning  | Same logic                            | Same logic                           |
 
-No code outside `_build_source()` cares which source is in use — that's the
-seam that lets the prototype graduate to real hardware.
+The only swap-point is `makeSource()` in `js/app.js`. Everything else is
+source-agnostic.
