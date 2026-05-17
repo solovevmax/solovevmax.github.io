@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Herb Garden</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="leaf" aria-hidden="true">&#x1F33F;</span>
+      <h1>Herb Garden</h1>
+    </div>
+    <div class="status-cluster">
+      <span id="demo-badge" class="badge demo" hidden>Demo Data</span>
+      <span id="conn-badge" class="badge">…</span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="home">Home</button>
+    <button class="tab" data-tab="live">Live Data</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="profile">Plant Profile</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="alerts">Alerts</button>
+  </nav>
+
+  <main>
+    <!-- HOME -->
+    <section class="panel active" id="tab-home">
+      <div class="home-grid">
+        <div class="card hero">
+          <div id="plant-image" class="plant-image"></div>
+          <h2 id="plant-name">—</h2>
+          <p id="plant-sci" class="muted"></p>
+          <p id="last-watered" class="muted small"></p>
+          <button id="manual-water" class="primary">Water now</button>
+        </div>
+        <div class="card gauge-card">
+          <h3>Plant Health</h3>
+          <div class="gauge-wrap">
+            <svg id="gauge" viewBox="0 0 200 120" width="100%">
+              <path d="M20,110 A80,80 0 0,1 180,110" class="gauge-track"/>
+              <path id="gauge-fill" d="" class="gauge-fill"/>
+              <text id="gauge-value" x="100" y="95" text-anchor="middle"
+                    class="gauge-value">--</text>
+            </svg>
+          </div>
+          <p id="gauge-explanation" class="explanation">…</p>
+          <div id="reservoir-warning" class="warning" hidden>
+            Reservoir low - watering may be unavailable
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE DATA -->
+    <section class="panel" id="tab-live">
+      <div class="grid-cards" id="live-cards"></div>
+      <p class="muted small" id="live-ts"></p>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="panel" id="tab-history">
+      <h3>Recent watering</h3>
+      <ul id="hist-water" class="event-list"></ul>
+      <h3>Recent alerts</h3>
+      <ul id="hist-alerts" class="event-list"></ul>
+    </section>
+
+    <!-- PLANT PROFILE -->
+    <section class="panel" id="tab-profile">
+      <div class="card">
+        <h2 id="prof-name">—</h2>
+        <p class="muted" id="prof-sci"></p>
+        <p id="prof-notes"></p>
+        <h3>Ideal care ranges</h3>
+        <table class="ranges">
+          <thead>
+            <tr><th>Metric</th><th>Ideal</th><th>OK</th><th>Weight</th></tr>
+          </thead>
+          <tbody id="ranges-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="panel" id="tab-settings">
+      <form id="settings-form" class="card">
+        <label>
+          Selected herb
+          <select name="selected_plant" id="plant-select"></select>
+        </label>
+        <label>
+          Moisture threshold (%)
+          <input type="number" min="0" max="100" name="moisture_threshold_pct" />
+        </label>
+        <label>
+          Watering cooldown (seconds)
+          <input type="number" min="0" name="watering_cooldown_s" />
+        </label>
+        <label>
+          Watering duration (ms)
+          <input type="number" min="100" step="100" name="watering_duration_ms" />
+        </label>
+        <label>
+          Low reservoir alert (%)
+          <input type="number" min="0" max="100" name="low_reservoir_pct" />
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="notifications_enabled" />
+          Enable notifications
+        </label>
+        <fieldset>
+          <legend>Serial connection</legend>
+          <label>
+            Data source
+            <select name="data_source">
+              <option value="mock">Mock / Demo</option>
+              <option value="serial">Live serial (Arduino)</option>
+            </select>
+          </label>
+          <label>
+            Serial port
+            <input type="text" name="serial_port" placeholder="/dev/ttyACM0 or COM3" />
+          </label>
+          <label>
+            Baud
+            <input type="number" name="serial_baud" />
+          </label>
+          <p class="muted small" id="serial-status"></p>
+        </fieldset>
+        <button type="submit" class="primary">Save settings</button>
+        <p id="save-status" class="muted small"></p>
+      </form>
+    </section>
+
+    <!-- ALERTS -->
+    <section class="panel" id="tab-alerts">
+      <ul id="all-alerts" class="event-list"></ul>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
