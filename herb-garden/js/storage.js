@@ -4,8 +4,8 @@
   const KEYS = {
     settings: 'herbgarden.settings.v1',
     events:   'herbgarden.events.v1',
-    scenario: 'herbgarden.scenario.v1',
     waterTs:  'herbgarden.lastWaterTs.v1',
+    testMode: 'herbgarden.testMode.v1',
   };
 
   const DEFAULTS = {
@@ -55,8 +55,8 @@
     return null;
   }
 
-  function loadScenario() { return localStorage.getItem(KEYS.scenario) || 'live'; }
-  function saveScenario(s) { try { localStorage.setItem(KEYS.scenario, s); } catch (_) {} }
+  function loadTestMode() { return readJSON(KEYS.testMode, null); }
+  function saveTestMode(state) { writeJSON(KEYS.testMode, state); }
 
   function loadLastWaterTs() {
     const v = Number(localStorage.getItem(KEYS.waterTs));
@@ -70,7 +70,7 @@
     DEFAULTS,
     loadSettings, saveSettings,
     loadEvents, addEvent, addEventAt, clearEvents, setEvents, lastOf,
-    loadScenario, saveScenario,
+    loadTestMode, saveTestMode,
     loadLastWaterTs, saveLastWaterTs,
   };
 })(window);

@@ -2,7 +2,7 @@
 (function () {
   const { PLANTS, SCENARIOS, ILLUSTRATIONS, getPlant } = window.HerbPlants;
   const { computeHealth, bucket } = window.HerbHealth;
-  const { ScenarioSource, LiveMockSource, SerialSource } = window.HerbSources;
+  const { LiveMockSource, SerialSource } = window.HerbSources;
   const S = window.HerbStorage;
 
   const $ = (sel) => document.querySelector(sel);
@@ -23,10 +23,9 @@
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v6a7 7 0 0 1-14 0z"/><path d="M5 14h14"/></svg>' },
   ];
 
-  // --- Controller state ----------------------------------------------------
+  // --- Live mode controller state ------------------------------------------
   let settings = S.loadSettings();
   let plant = getPlant(settings.selected_plant);
-  let scenarioId = S.loadScenario();        // 'live' | 'healthy' | 'dry' | 'low_reservoir'
   let source = null;
   let alertActive = { low_res: false, stale: false, off: false };
 
@@ -34,61 +33,12 @@
     if (settings.data_source === 'serial' && SerialSource.isSupported()) {
       return new SerialSource(settings.stale_after_s * 1000);
     }
-    if (scenarioId && scenarioId !== 'live' && SCENARIOS[scenarioId]) {
-      const sc = { id: scenarioId, ...SCENARIOS[scenarioId] };
-      return new ScenarioSource(sc);
-    }
     return new LiveMockSource();
   }
   function rebuildSource() {
     if (source) source.stop();
     source = makeSource();
     source.start();
-  }
-
-  // Seed a believable history + last-watered time when switching to a fixed
-  // scenario, so the History tab and "Last watered" tile reflect the demo.
-  function primeScenario(id) {
-    if (!SCENARIOS[id]) return;
-    const sc = SCENARIOS[id];
-    // Suppress edge-triggered duplicate of any alert we're about to seed
-    alertActive = { low_res: false, stale: false, off: false };
-    if (id === 'low_reservoir') alertActive.low_res = true;
-    const now = Date.now();
-    const lwTs = now - sc.last_watered_minutes_ago * 60_000;
-    S.saveLastWaterTs(lwTs);
-    const seeded = [];
-    // Last watering event
-    seeded.push({
-      timestamp: new Date(lwTs).toISOString(),
-      kind: 'watering',
-      message: sc.last_watered_minutes_ago < 60
-        ? 'Auto-watered (low moisture)'
-        : 'Watered earlier today',
-    });
-    // A bit further back: a benign automated check (info)
-    seeded.push({
-      timestamp: new Date(now - sc.last_watered_minutes_ago * 60_000 - 3 * 3600_000).toISOString(),
-      kind: 'watering',
-      message: 'Auto-watered (low moisture)',
-    });
-    // Scenario-specific alerts
-    if (id === 'low_reservoir') {
-      seeded.push({
-        timestamp: new Date(now - 90_000).toISOString(),
-        kind: 'alert',
-        message: 'Low reservoir (12%) — refill needed',
-      });
-    }
-    if (id === 'dry') {
-      seeded.push({
-        timestamp: new Date(now - 5 * 60_000).toISOString(),
-        kind: 'alert',
-        message: 'Low moisture detected',
-      });
-    }
-    seeded.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-    S.setEvents(seeded);
   }
   rebuildSource();
 
@@ -161,8 +111,8 @@
   // Gauge path geometry: half-circle, r=110, from (40,150) to (260,150).
   const GAUGE_LEN = Math.PI * 110; // ≈ 345.6
 
-  function setGauge(score) {
-    const fill = $('#gauge-fill');
+  function setGauge(fillSel, numSel, score) {
+    const fill = $(fillSel);
     fill.style.strokeDasharray = String(GAUGE_LEN);
     const pct = Math.max(0, Math.min(100, score)) / 100;
     fill.style.strokeDashoffset = String(GAUGE_LEN * (1 - pct));
@@ -170,7 +120,7 @@
     if (score < 70) color = 'var(--warn)';
     if (score < 40) color = 'var(--bad)';
     fill.style.stroke = color;
-    $('#gauge-num').textContent = score;
+    $(numSel).textContent = score;
   }
 
   function fmtAgo(iso) {
@@ -200,7 +150,7 @@
     $('#hero-name').textContent = plant.common_name;
     $('#hero-sci').textContent = plant.scientific_name;
 
-    setGauge(state.health.score);
+    setGauge('#gauge-fill', '#gauge-num', state.health.score);
     $('#gauge-exp').textContent = state.health.explanation;
     $('#hero-status').textContent = state.health.summary;
     $('#gauge-sub').textContent = subscoresHint(state.health.subscores);
@@ -376,7 +326,7 @@
     $('#ranges').innerHTML = rows.join('');
   }
 
-  // Connection chip + demo banner
+  // Connection chip + demo banner (live mode only)
   function renderConn(state) {
     const chip = $('#conn-chip');
     const label = $('#conn-label');
@@ -386,23 +336,16 @@
       chip.classList.add('stale'); label.textContent = 'Stale data';
     } else if (state.connected) {
       chip.classList.add('ok');
-      label.textContent = isDemo ? source.sourceLabel : 'Connected';
+      label.textContent = isDemo ? 'Demo (mock)' : 'Connected';
     } else {
       chip.classList.add('off'); label.textContent = 'Disconnected';
     }
-    // Demo banner
+    // Demo banner is only shown when the active panel is a live one and we're
+    // not on real Arduino data. Test Mode hides it (it has its own SIM note).
     const banner = $('#demo-banner');
-    const msg = $('#banner-msg');
-    if (isDemo) {
-      banner.classList.remove('hidden');
-      if (scenarioId !== 'live' && SCENARIOS[scenarioId]) {
-        msg.innerHTML = `<strong>${SCENARIOS[scenarioId].label}.</strong> ${SCENARIOS[scenarioId].banner}`;
-      } else {
-        msg.innerHTML = `Using simulated readings. Pick a <strong>Test</strong> scenario or set Data Source to <strong>Live serial</strong> in Settings.`;
-      }
-    } else {
-      banner.classList.add('hidden');
-    }
+    const onTestMode = $('#panel-test-mode').classList.contains('active');
+    if (isDemo && !onTestMode) banner.classList.remove('hidden');
+    else banner.classList.add('hidden');
   }
 
   // Settings form binding
@@ -446,7 +389,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Wiring: tabs, scenario picker, settings, water button
+  // Wiring: tabs, settings, water button
   // ------------------------------------------------------------------------
   document.querySelectorAll('.tab').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -459,25 +402,15 @@
       if (t === 'profile') renderProfile();
       if (t === 'settings') renderSettings();
       if (t === 'live') render();
+      if (t === 'test-mode') renderTestMode();
+      // Re-render conn so the demo banner shows/hides per tab
+      const r = source.getLatest();
+      renderConn({
+        connected: source.isConnected(),
+        stale: source.isStale ? source.isStale() : false,
+        reading: r,
+      });
     });
-  });
-
-  // Scenario dropdown
-  $('#scenario').value = scenarioId;
-  $('#scenario').addEventListener('change', (e) => {
-    scenarioId = e.target.value;
-    S.saveScenario(scenarioId);
-    if (scenarioId === 'live') {
-      // Reset the watering history when leaving a scenario so live demo
-      // starts from a clean state.
-      S.clearEvents();
-      S.saveLastWaterTs(0);
-    } else {
-      primeScenario(scenarioId);
-    }
-    if (settings.data_source !== 'serial') rebuildSource();
-    renderHistory();
-    render();
   });
 
   // Water now
@@ -530,11 +463,248 @@
     }
   });
 
+  // ------------------------------------------------------------------------
+  // TEST MODE — fully isolated manual sandbox. Does NOT touch the live data
+  // source, events log, or last-watered timestamp.
+  // ------------------------------------------------------------------------
+  const TEST_DEFAULTS = {
+    moisture_pct: 58, temperature_c: 22.4, humidity_pct: 52,
+    ph: 6.6, light_lux: 22000, reservoir_level: 85,
+    last_watered_min_ago: 90,
+    ph_present: true,
+  };
+  let testState = S.loadTestMode() || { ...TEST_DEFAULTS };
+
+  function buildTestReading() {
+    return {
+      timestamp: new Date().toISOString(),
+      moisture_pct:    Number(testState.moisture_pct),
+      temperature_c:   Number(testState.temperature_c),
+      humidity_pct:    Number(testState.humidity_pct),
+      ph:              testState.ph_present ? Number(testState.ph) : null,
+      light_lux:       Number(testState.light_lux),
+      reservoir_level: Number(testState.reservoir_level),
+      pump_event: null,
+    };
+  }
+
+  function fmtMinAgo(min) {
+    if (min < 1) return 'just now';
+    if (min < 60) return `${Math.round(min)}m ago`;
+    if (min < 1440) {
+      const h = min / 60;
+      return h < 10 ? `${h.toFixed(1)}h ago` : `${Math.round(h)}h ago`;
+    }
+    return `${Math.round(min / 1440)}d ago`;
+  }
+
+  function renderPresets() {
+    const html = Object.entries(SCENARIOS).map(([id, sc]) =>
+      `<button class="preset" data-preset="${id}" type="button">${sc.label}</button>`
+    ).join('');
+    $('#presets').innerHTML = html;
+    $('#presets').querySelectorAll('.preset').forEach(b => {
+      b.addEventListener('click', () => applyPreset(b.dataset.preset));
+    });
+  }
+
+  function applyPreset(id) {
+    const sc = SCENARIOS[id];
+    if (!sc) return;
+    testState = {
+      ...sc.reading,
+      last_watered_min_ago: sc.last_watered_minutes_ago,
+      ph_present: sc.ph_present !== false,
+    };
+    S.saveTestMode(testState);
+    renderTestInputs();
+    renderTestPreview();
+    // Highlight the active preset chip
+    $('#presets').querySelectorAll('.preset').forEach(b =>
+      b.classList.toggle('active', b.dataset.preset === id));
+  }
+
+  function bindSliders() {
+    document.querySelectorAll('#panel-test-mode .slider-row').forEach(row => {
+      const input = row.querySelector('input[type="range"]');
+      const key = row.dataset.key;
+      input.addEventListener('input', () => {
+        testState[key] = key === 'ph' ? parseFloat(input.value) : parseFloat(input.value);
+        S.saveTestMode(testState);
+        // Clear active preset highlight on manual edit
+        $('#presets').querySelectorAll('.preset.active').forEach(b => b.classList.remove('active'));
+        renderTestInputs();
+        renderTestPreview();
+      });
+    });
+    $('#ph-present').addEventListener('change', (e) => {
+      testState.ph_present = e.target.checked;
+      S.saveTestMode(testState);
+      renderTestInputs();
+      renderTestPreview();
+    });
+    $('#reset-test').addEventListener('click', () => applyPreset('healthy'));
+  }
+
+  function renderTestInputs() {
+    document.querySelectorAll('#panel-test-mode .slider-row').forEach(row => {
+      const input = row.querySelector('input[type="range"]');
+      const valEl = row.querySelector('.srval');
+      const key = row.dataset.key;
+      const unit = row.dataset.unit || '';
+      const v = testState[key];
+      input.value = v;
+      const isPhRow = key === 'ph';
+      const phOff = isPhRow && !testState.ph_present;
+      row.classList.toggle('disabled', phOff);
+      input.disabled = phOff;
+      if (phOff) {
+        valEl.textContent = 'No sensor';
+      } else if (key === 'ph') {
+        valEl.textContent = Number(v).toFixed(1);
+      } else if (key === 'light_lux') {
+        valEl.textContent = Math.round(v).toLocaleString() + unit;
+      } else if (key === 'last_watered_min_ago') {
+        valEl.textContent = fmtMinAgo(Number(v));
+      } else {
+        valEl.textContent = Math.round(v) + unit;
+      }
+    });
+    $('#ph-present').checked = !!testState.ph_present;
+  }
+
+  function renderTestPreview() {
+    const reading = buildTestReading();
+    const health = computeHealth(plant, reading);
+
+    setGauge('#test-gauge-fill', '#test-gauge-num', health.score);
+    $('#test-gauge-exp').textContent = health.explanation;
+    $('#test-summary').textContent = health.summary;
+
+    // Last watered tile
+    const min = Number(testState.last_watered_min_ago);
+    $('#test-lw').textContent = fmtMinAgo(min);
+    const lwTs = new Date(Date.now() - min * 60_000);
+    $('#test-lw-sub').textContent =
+      lwTs.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      + ' · ' + lwTs.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
+    // Reservoir tile
+    const tileRes = $('#test-tile-reservoir');
+    tileRes.classList.remove('warn', 'bad');
+    const res = reading.reservoir_level;
+    $('#test-res').textContent = Math.round(res) + '%';
+    $('#test-res-bar').style.width = Math.max(0, Math.min(100, res)) + '%';
+    if (res < settings.low_reservoir_pct) tileRes.classList.add('bad');
+    else if (res < settings.low_reservoir_pct + 15) tileRes.classList.add('warn');
+
+    // Light tile
+    const lux = reading.light_lux;
+    const tileLight = $('#test-tile-light');
+    tileLight.classList.remove('warn', 'bad');
+    $('#test-light').textContent = Math.round(lux).toLocaleString() + ' lx';
+    let descr = 'Bright indirect';
+    if (lux < 3000)       { descr = 'Too dim'; tileLight.classList.add('bad'); }
+    else if (lux < 10000) { descr = 'Low light'; tileLight.classList.add('warn'); }
+    else if (lux > 100000){ descr = 'Very intense'; tileLight.classList.add('warn'); }
+    else if (lux > 50000) { descr = 'Bright sun'; }
+    else                  { descr = 'Ideal for basil'; }
+    $('#test-light-sub').textContent = descr;
+
+    // Key metrics chips
+    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'ph'];
+    $('#test-key-metrics').innerHTML = keys.map(k => {
+      const def = METRICS.find(m => m.key === k);
+      const v = reading[k];
+      const b = bucket(plant, k, v);
+      const cls = b === 'missing' ? '' : (b === 'good' ? '' : ' ' + b);
+      const formatted = fmtVal(k, v);
+      return `<div class="chip${cls}">
+        <div class="icon">${def.icon}</div>
+        <div class="ml">${def.name}</div>
+        <div class="mv">${formatted == null ? '<span class="missing">—</span>' : formatted + def.unit}</div>
+      </div>`;
+    }).join('');
+
+    // Sub-scores breakdown
+    const SUB_LABELS = {
+      moisture_pct: 'Soil moisture', temperature_c: 'Temperature',
+      humidity_pct: 'Humidity', ph: 'pH',
+      light_lux: 'Light (BH1750)', reservoir: 'Reservoir',
+    };
+    const subRows = Object.entries(health.subscores).map(([k, v]) => {
+      const w = plant.weights[k] != null ? Math.round(plant.weights[k] * 100) + '% weight' : '';
+      let cls = '';
+      if (v < 40) cls = 'bad';
+      else if (v < 70) cls = 'warn';
+      return `<div class="subscore-row ${cls}">
+        <div class="lbl">${SUB_LABELS[k]}<br><span style="color:var(--muted);font-size:11px">${w}</span></div>
+        <div class="bar"><span style="width:${v}%"></span></div>
+        <div class="num">${Math.round(v)}</div>
+      </div>`;
+    });
+    // Show missing pH explicitly
+    if (!testState.ph_present) {
+      subRows.push(`<div class="subscore-row missing">
+        <div class="lbl">pH<br><span style="color:var(--muted);font-size:11px">excluded (no sensor)</span></div>
+        <div class="bar"><span style="width:0"></span></div>
+        <div class="num">—</div>
+      </div>`);
+    }
+    $('#test-subscores').innerHTML = subRows.join('');
+
+    // Alerts that would trigger
+    const alerts = [];
+    if (res < settings.low_reservoir_pct) {
+      alerts.push({ kind: 'alert', msg: `Low reservoir (${Math.round(res)}%) — refill needed` });
+    }
+    const wouldAutoWater = reading.moisture_pct < settings.moisture_threshold_pct
+                          && res >= settings.low_reservoir_pct;
+    if (wouldAutoWater) {
+      alerts.push({ kind: 'watering', msg:
+        `Would auto-water now (moisture ${Math.round(reading.moisture_pct)}% < threshold ${settings.moisture_threshold_pct}%)` });
+    }
+    if (reading.moisture_pct < settings.moisture_threshold_pct
+        && res < settings.low_reservoir_pct) {
+      alerts.push({ kind: 'alert', msg: 'Watering needed but reservoir is empty — refill before watering can resume' });
+    }
+    if (reading.temperature_c < plant.ranges.temperature_c.ok[0]) {
+      alerts.push({ kind: 'alert', msg: `Temperature ${reading.temperature_c.toFixed(1)}°C is below the safe range` });
+    }
+    if (reading.temperature_c > plant.ranges.temperature_c.ok[1]) {
+      alerts.push({ kind: 'alert', msg: `Temperature ${reading.temperature_c.toFixed(1)}°C is above the safe range` });
+    }
+    if (alerts.length === 0) {
+      $('#test-alerts').innerHTML = `<div class="empty">No alerts at these values</div>`;
+    } else {
+      $('#test-alerts').innerHTML = alerts.map(a => {
+        const icoCls = a.kind === 'alert' ? 'alert' : '';
+        const iconSvg = a.kind === 'watering'
+          ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>'
+          : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>';
+        return `<div class="event">
+          <div class="left">
+            <div class="ico ${icoCls}">${iconSvg}</div>
+            <div class="msg">${a.msg}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  function renderTestMode() {
+    renderTestInputs();
+    renderTestPreview();
+  }
+
+  renderPresets();
+  bindSliders();
+
   // First paint
-  if (scenarioId !== 'live' && SCENARIOS[scenarioId]) primeScenario(scenarioId);
   renderSettings();
   renderProfile();
   renderHistory();
   render();
+  renderTestMode();
   setInterval(tick, 1000);
 })();

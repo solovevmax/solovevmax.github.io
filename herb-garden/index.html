@@ -30,25 +30,16 @@
     </div>
 
     <div class="topbar-right">
-      <label class="demo-select" id="demo-select" title="Test Data">
-        <span class="ts-label">Test</span>
-        <select id="scenario" aria-label="Test data scenario">
-          <option value="live">Live demo</option>
-          <option value="healthy">Healthy</option>
-          <option value="dry">Dry soil</option>
-          <option value="low_reservoir">Low reservoir</option>
-        </select>
-      </label>
       <span class="conn-chip ok" id="conn-chip">
         <span class="dot"></span><span id="conn-label">Connected</span>
       </span>
     </div>
   </header>
 
-  <!-- Demo banner -->
+  <!-- Demo banner (live mode, mock source only) -->
   <div class="banner" id="demo-banner">
     <span class="pill">Demo</span>
-    <span id="banner-msg">Using simulated readings. Switch to <strong>Live serial</strong> in Settings to connect an Arduino.</span>
+    <span id="banner-msg">Using mock readings. Connect a real Arduino in <strong>Settings → Connection</strong>, or open the <strong>Test Mode</strong> tab to try scenarios manually.</span>
   </div>
 
   <!-- Tab nav -->
@@ -93,6 +84,12 @@
           <path d="M10 21a2 2 0 0 0 4 0"/>
         </svg>
         Alerts
+      </button>
+      <button class="tab" data-tab="test-mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 3h6M10 3v6L4 19a2 2 0 0 0 1.7 3h12.6A2 2 0 0 0 20 19L14 9V3"/>
+        </svg>
+        Test
       </button>
     </div>
   </nav>
@@ -258,6 +255,120 @@
     <section class="panel" id="panel-alerts">
       <h2>Alerts</h2>
       <div class="events" id="all-alerts"></div>
+    </section>
+
+    <!-- TEST MODE — isolated manual sandbox -->
+    <section class="panel" id="panel-test-mode">
+      <h2>Test Mode</h2>
+
+      <div class="test-note">
+        <span class="pill-sim">SIMULATED</span>
+        <span>Manual data only — not from the live system. Adjust values to preview how the UI would respond.</span>
+      </div>
+
+      <p class="section-title">Scenario presets</p>
+      <div class="presets" id="presets"></div>
+
+      <div class="test-grid">
+        <!-- Inputs (left on desktop) -->
+        <div class="card test-inputs">
+          <p class="card-title">Sensor inputs</p>
+
+          <div class="slider-row" data-key="moisture_pct" data-unit="%">
+            <div class="srlabel"><span>Soil moisture</span><span class="srval">—</span></div>
+            <input type="range" min="0" max="100" step="1"/>
+          </div>
+
+          <div class="slider-row" data-key="temperature_c" data-unit="°C">
+            <div class="srlabel"><span>Temperature</span><span class="srval">—</span></div>
+            <input type="range" min="-10" max="45" step="0.5"/>
+          </div>
+
+          <div class="slider-row" data-key="humidity_pct" data-unit="%">
+            <div class="srlabel"><span>Humidity</span><span class="srval">—</span></div>
+            <input type="range" min="0" max="100" step="1"/>
+          </div>
+
+          <div class="slider-row" data-key="ph" data-unit="">
+            <div class="srlabel">
+              <span>Soil pH</span>
+              <span class="srval">—</span>
+            </div>
+            <input type="range" min="0" max="14" step="0.1"/>
+            <label class="ph-toggle">
+              <input type="checkbox" id="ph-present" checked/>
+              <span>pH sensor present</span>
+            </label>
+          </div>
+
+          <div class="slider-row" data-key="light_lux" data-unit=" lx">
+            <div class="srlabel"><span>Light (BH1750)</span><span class="srval">—</span></div>
+            <input type="range" min="0" max="120000" step="500"/>
+          </div>
+
+          <div class="slider-row" data-key="reservoir_level" data-unit="%">
+            <div class="srlabel"><span>Reservoir</span><span class="srval">—</span></div>
+            <input type="range" min="0" max="100" step="1"/>
+          </div>
+
+          <div class="slider-row" data-key="last_watered_min_ago" data-unit=" min ago">
+            <div class="srlabel"><span>Last watered</span><span class="srval">—</span></div>
+            <input type="range" min="0" max="1440" step="5"/>
+          </div>
+
+          <button class="btn ghost full" id="reset-test" type="button" style="margin-top:14px">
+            Reset to Healthy preset
+          </button>
+        </div>
+
+        <!-- Live preview (right on desktop) -->
+        <div class="test-preview">
+          <div class="card gauge-card">
+            <p class="card-title">Plant Health</p>
+            <div class="gauge-wrap">
+              <svg class="gauge-svg" viewBox="0 0 300 180">
+                <path class="gauge-track" d="M 40 150 A 110 110 0 0 1 260 150"/>
+                <path id="test-gauge-fill" class="gauge-fill" d="M 40 150 A 110 110 0 0 1 260 150"/>
+              </svg>
+              <div class="gauge-readout">
+                <div><span class="gauge-number" id="test-gauge-num">--</span><span class="gauge-suffix"> /100</span></div>
+              </div>
+            </div>
+            <p class="gauge-explanation" id="test-gauge-exp">—</p>
+            <p class="gauge-sub" id="test-summary">—</p>
+          </div>
+
+          <div class="strip">
+            <div class="tile" id="test-tile-watered">
+              <span class="tlabel">Last watered</span>
+              <span class="tvalue" id="test-lw">—</span>
+              <span class="tsub" id="test-lw-sub"></span>
+            </div>
+            <div class="tile" id="test-tile-reservoir">
+              <span class="tlabel">Reservoir</span>
+              <span class="tvalue" id="test-res">—</span>
+              <div class="res-bar"><span id="test-res-bar" style="width:0"></span></div>
+            </div>
+            <div class="tile" id="test-tile-light">
+              <span class="tlabel">Light</span>
+              <span class="tvalue" id="test-light">—</span>
+              <span class="tsub" id="test-light-sub"></span>
+            </div>
+          </div>
+
+          <div class="metrics-row" id="test-key-metrics"></div>
+
+          <div class="card">
+            <p class="card-title">Sub-scores · how the formula sees it</p>
+            <div class="subscore-list" id="test-subscores"></div>
+          </div>
+
+          <div class="card">
+            <p class="card-title">Alerts that would trigger</p>
+            <div class="events" id="test-alerts"></div>
+          </div>
+        </div>
+      </div>
     </section>
 
   </main>

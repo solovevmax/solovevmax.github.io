@@ -93,34 +93,89 @@
     },
   };
 
-  // Test Data scenarios — fixed believable readings for previewing the UI.
+  // Test Mode presets. Each just populates the manual input fields; you can
+  // edit any value afterward. ph_present=false means "no pH sensor attached".
   const SCENARIOS = {
     healthy: {
       label: 'Healthy basil',
-      banner: 'Preview of a happy, well-cared-for basil plant.',
       reading: {
         moisture_pct: 58, temperature_c: 22.4, humidity_pct: 52,
         ph: 6.6, light_lux: 22000, reservoir_level: 85,
       },
       last_watered_minutes_ago: 90,
+      ph_present: true,
     },
     dry: {
-      label: 'Dry soil — needs water',
-      banner: 'Preview of a thirsty plant. Press "Water now" to see the watering action.',
+      label: 'Dry soil',
       reading: {
         moisture_pct: 22, temperature_c: 26.1, humidity_pct: 38,
         ph: 6.5, light_lux: 18000, reservoir_level: 60,
       },
-      last_watered_minutes_ago: 720, // 12 h ago
+      last_watered_minutes_ago: 720,
+      ph_present: true,
+    },
+    overly_wet: {
+      label: 'Overly wet soil',
+      reading: {
+        moisture_pct: 92, temperature_c: 22.0, humidity_pct: 75,
+        ph: 6.6, light_lux: 20000, reservoir_level: 80,
+      },
+      last_watered_minutes_ago: 20,
+      ph_present: true,
     },
     low_reservoir: {
       label: 'Low reservoir',
-      banner: 'Preview of a low water tank. The reservoir is at 12% — a refill is needed.',
       reading: {
         moisture_pct: 44, temperature_c: 23.0, humidity_pct: 49,
         ph: 6.4, light_lux: 24000, reservoir_level: 12,
       },
       last_watered_minutes_ago: 45,
+      ph_present: true,
+    },
+    poor_light: {
+      label: 'Poor light',
+      reading: {
+        moisture_pct: 50, temperature_c: 22.0, humidity_pct: 52,
+        ph: 6.6, light_lux: 1500, reservoir_level: 80,
+      },
+      last_watered_minutes_ago: 120,
+      ph_present: true,
+    },
+    low_temp: {
+      label: 'Low temperature',
+      reading: {
+        moisture_pct: 50, temperature_c: 10.5, humidity_pct: 50,
+        ph: 6.6, light_lux: 20000, reservoir_level: 80,
+      },
+      last_watered_minutes_ago: 90,
+      ph_present: true,
+    },
+    high_temp: {
+      label: 'High temperature',
+      reading: {
+        moisture_pct: 38, temperature_c: 34.5, humidity_pct: 32,
+        ph: 6.5, light_lux: 60000, reservoir_level: 70,
+      },
+      last_watered_minutes_ago: 180,
+      ph_present: true,
+    },
+    low_ph: {
+      label: 'Low soil pH',
+      reading: {
+        moisture_pct: 55, temperature_c: 22.0, humidity_pct: 50,
+        ph: 4.8, light_lux: 22000, reservoir_level: 80,
+      },
+      last_watered_minutes_ago: 90,
+      ph_present: true,
+    },
+    high_ph: {
+      label: 'High soil pH',
+      reading: {
+        moisture_pct: 55, temperature_c: 22.0, humidity_pct: 50,
+        ph: 8.4, light_lux: 22000, reservoir_level: 80,
+      },
+      last_watered_minutes_ago: 90,
+      ph_present: true,
     },
   };
 

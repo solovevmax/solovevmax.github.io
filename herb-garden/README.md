@@ -1,52 +1,116 @@
 # Herb Garden — local prototype
 
 A calm, mobile-first prototype for a self-watering smart herb garden.
-**Pure static site** — no backend, no build step. Open it locally now;
-later, host it as a static page (e.g. GitHub Pages) or connect a real
-Arduino Nano RP2040 Connect over USB serial from the browser.
+**Pure static site** — no backend, no build step. The live monitoring
+app and the new **Test Mode** sandbox are two completely separate
+experiences. Designed to later connect to an Arduino Nano RP2040
+Connect over USB serial; ready to host as a static page (e.g. GitHub
+Pages) without changes.
+
+## Two modes
+
+| Mode             | What it is                                   | Data source                  | Touches history? |
+|------------------|----------------------------------------------|------------------------------|------------------|
+| **Live mode**    | The real monitoring app (Home, Live Data, History, Plant Profile, Settings, Alerts) | `LiveMockSource` (drifting mock) → swap to Arduino in Settings | Yes — real events log |
+| **Test Mode tab**| Manual sandbox for UI / logic evaluation     | Whatever values you enter via sliders + presets | No — fully isolated |
+
+A clear `SIMULATED` pill at the top of Test Mode reminds you it's
+manual data, not from the live system. Live mode keeps a `Demo (mock)`
+chip in the header while you haven't connected a real Arduino yet.
 
 ## Run it locally
-
-The simplest path that works on every browser:
 
 ```bash
 cd herb-garden
 python3 -m http.server 8000
 ```
 
-Then open <http://localhost:8000>.
+Open <http://localhost:8000>.
 
-> A local server is needed because the JS files are loaded as separate
-> scripts and Web Serial requires a secure context (localhost counts as
-> secure). Any static server works — `npx serve`, `php -S`, etc.
+A local server is needed (separate JS files + Web Serial needs a secure
+context — `localhost` qualifies). Any static server works: `npx serve`,
+`php -S 0.0.0.0:8000`, etc.
 
-## Test Data (preview without an Arduino)
+## Open it on your phone for UI testing
 
-There's a **Test** dropdown in the top-right at all times. Switch between:
+Both your computer and phone must be on the **same Wi-Fi network**.
 
-- **Live demo** — drifting mock data; moisture trickles down, auto-water
-  fires when it crosses the threshold, the gauge animates.
-- **Healthy basil** — fixed thriving readings (score ~95+).
-- **Dry soil — needs water** — moisture below threshold; click *Water now*
-  or just wait for auto-water to kick in.
-- **Low reservoir** — reservoir at ~12%; triggers the refill alert and
-  blocks auto-watering.
+1. **Start the server bound to all interfaces.** `python3 -m http.server`
+   already listens on `0.0.0.0` by default (i.e. on every network
+   interface), so the command above is enough. To be explicit:
 
-Every section (Home, Live Data, History, Plant Profile, Settings, Alerts)
-updates from the same source, so the whole UI previews accurately.
+   ```bash
+   python3 -m http.server 8000 --bind 0.0.0.0
+   ```
+
+2. **Find your computer's local IP address:**
+
+   - **macOS** (Wi-Fi): `ipconfig getifaddr en0`
+     If you're on a wired Mac, try `en1` or use `ifconfig | grep "inet "`.
+   - **Linux**: `hostname -I` (usually the first IP listed).
+   - **Windows**: `ipconfig` and look at the IPv4 line of your Wi-Fi
+     adapter — something like `192.168.x.x` or `10.0.x.x`.
+
+   You're looking for a private LAN address: typically starts with
+   `192.168.`, `10.`, or `172.16–31.`.
+
+3. **Open `http://<your-local-ip>:8000` on your phone's browser.**
+   Example: `http://192.168.1.42:8000`. The full app loads, including
+   Test Mode.
+
+4. **If the phone can't reach it,** the culprit is almost always your
+   computer's firewall blocking port 8000:
+
+   - **macOS**: System Settings → Network → Firewall → allow incoming
+     connections for `Python`, or temporarily turn the firewall off.
+   - **Windows**: Windows Security → Firewall & network protection →
+     Allow an app through firewall → add Python for the *Private*
+     network. Or run the dev server through the WSL2 console if
+     applicable.
+   - **Linux** (ufw): `sudo ufw allow 8000/tcp` (only while testing).
+   - Some public/guest Wi-Fi networks (cafés, hotels, school) block
+     device-to-device traffic. Use a phone hotspot or a home/private
+     network in that case.
+
+> Hot reload tip: edit a file, then just refresh the page on your
+> phone. No restart needed.
+
+## Test Mode tour
+
+The Test tab gives you:
+
+- **Scenario presets** (chips, horizontally scrollable): Healthy basil,
+  Dry soil, Overly wet soil, Low reservoir, Poor light, Low temperature,
+  High temperature, Low pH, High pH. Each one only **populates the
+  sliders** — you can edit any value afterward.
+- **Sensor inputs** (sliders + numeric overlay): soil moisture,
+  temperature, humidity, soil pH (+ a "pH sensor present" toggle),
+  light intensity in lux, reservoir level, last-watered minutes ago.
+- **Live preview** that recomputes instantly: Plant Health gauge, plain-
+  English status summary, last-watered tile, reservoir tile with bar,
+  light tile with descriptor, key-metric chips, full sub-scores
+  breakdown showing exactly how the formula sees each metric, and the
+  alerts that *would* trigger at those values (low reservoir,
+  auto-water trigger, temperature out of safe range, etc.).
+- **Reset to Healthy preset** button.
+
+State is persisted to `localStorage` so your last Test Mode setup
+survives a reload, but it never leaks into the live history or
+last-watered time.
 
 ## Switch to a live Arduino
 
-1. Open **Settings → Connection** and set *Data source* to
-   **Live serial (Arduino)**.
-2. Click **Connect Arduino**. The browser prompts you to pick the serial
-   port. Use Chrome or Edge — Firefox/Safari don't yet support Web Serial.
-3. The Arduino must emit one JSON object per line at 115200 baud. The
-   demo banner disappears and the connection chip turns green.
+1. **Settings → Connection** → set *Data source* to **Live serial
+   (Arduino)**.
+2. Click **Connect Arduino**. Use Chrome or Edge (Web Serial requires
+   them). Pick the port.
+3. The Arduino must emit one JSON object per line at 115200 baud (see
+   schema below). The "Demo (mock)" chip turns into a green
+   "Connected" chip when frames start arriving.
 
 ## Serial schema
 
-**Arduino → app** (one JSON object per line, ~1 Hz):
+**Arduino → app** (~1 Hz, one JSON object per line):
 ```json
 {"timestamp":"2026-05-17T12:34:56Z","moisture":42.3,"temperature":22.1,
  "humidity":55,"ph":6.5,"light_lux":12000,"reservoir_level":80,
@@ -74,11 +138,11 @@ herb-garden/
 ├── index.html
 ├── styles.css
 ├── js/
-│   ├── plants.js      # Plant DB (basil) + Test Data SCENARIOS
+│   ├── plants.js      # Plant DB (basil) + SCENARIOS (used by Test Mode presets)
 │   ├── health.js      # Plant Health formula
-│   ├── sources.js     # ScenarioSource | LiveMockSource | SerialSource
-│   ├── storage.js     # localStorage helpers (settings + events)
-│   └── app.js         # Controller + UI rendering + tab nav
+│   ├── sources.js     # LiveMockSource | SerialSource (live mode only)
+│   ├── storage.js     # localStorage helpers (settings, events, test mode)
+│   └── app.js         # Live-mode controller + UI rendering + Test Mode sandbox
 └── README.md
 ```
 
@@ -100,8 +164,8 @@ PlantHealth = round( Σ wₘ · sₘ / Σ wₘ )  →  clamp 1..100
 Basil weights: moisture **30%**, temperature **20%**, light **20%**,
 humidity **10%**, pH **10%**, reservoir **10%**.
 
-The line under the gauge surfaces the worst sub-score in plain English:
-"Low moisture", "High temperature", "Reservoir low", etc.
+The Test Mode sub-scores card shows each metric's score and weight, so
+you can verify the formula behavior at any input combination.
 
 ## Adding a new herb
 
@@ -122,16 +186,3 @@ mint: {
   watering_cooldown_s: 600,
 }
 ```
-
-## What's mocked vs. real
-
-| Concern             | Mock / Test                          | Live (later)                         |
-|---------------------|--------------------------------------|--------------------------------------|
-| Sensor readings     | `ScenarioSource` / `LiveMockSource`  | `SerialSource` reads JSON lines      |
-| Water command       | Mock bumps moisture internally        | `{"cmd":"water"}` written to USB     |
-| Completion event    | Synthesized after command            | Arduino echoes `pump_event:"completed"` |
-| Connection chip     | Always green ("Demo (mock)" label)    | Green when port open and data fresh  |
-| Stale-data warning  | Same logic                            | Same logic                           |
-
-The only swap-point is `makeSource()` in `js/app.js`. Everything else is
-source-agnostic.

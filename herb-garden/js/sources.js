@@ -46,62 +46,6 @@
   }
 
   // -------------------------------------------------------------------------
-  // ScenarioSource — fixed Test Data state. Static reading; auto-water still
-  // works (manual + auto-trigger), and the chosen scenario evolves slightly so
-  // the UI feels alive (small jitter, moisture climbs after watering).
-  // -------------------------------------------------------------------------
-  class ScenarioSource {
-    constructor(scenario, intervalMs = 1000) {
-      this.scenarioId = scenario.id;
-      this.label = scenario.label;
-      this._base = { ...scenario.reading };
-      this._reading = null;
-      this._timer = null;
-      this._interval = intervalMs;
-      this._lastUpdate = 0;
-      this._pumpBump = 0;
-      this.sourceLabel = `Test: ${scenario.label}`;
-      // Static scenarios are previews; auto-water shouldn't fire automatically
-      // (would destabilize the demo state). Manual water still works.
-      this.allowAutoWater = false;
-    }
-    start() {
-      if (this._timer) return;
-      const tick = () => {
-        const j = (k, amp) => this._base[k] + (Math.random() - 0.5) * amp;
-        let moisture = this._base.moisture_pct + this._pumpBump + (Math.random() - 0.5) * 1.5;
-        // Pump effect fades quickly so the dry-soil scenario re-dries within a few seconds
-        if (this._pumpBump > 0) this._pumpBump = Math.max(0, this._pumpBump - 5);
-        const reading = {
-          timestamp: new Date().toISOString(),
-          moisture_pct: clean('moisture_pct', moisture),
-          temperature_c: clean('temperature_c', j('temperature_c', 0.4)),
-          humidity_pct:  clean('humidity_pct',  j('humidity_pct',  1.5)),
-          ph:            clean('ph',            j('ph',            0.05)),
-          light_lux:     clean('light_lux',     j('light_lux',     800)),
-          reservoir_level: clean('reservoir_level', this._base.reservoir_level - 0),
-          pump_event: null,
-        };
-        this._reading = reading;
-        this._lastUpdate = Date.now();
-      };
-      tick();
-      this._timer = setInterval(tick, this._interval);
-    }
-    stop() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
-    getLatest() { return this._reading; }
-    sendCommand(cmd) {
-      if (cmd && cmd.cmd === 'water') {
-        // Pump bumps moisture upward by ~25%; reservoir drops a touch
-        this._pumpBump += 25;
-        this._base.reservoir_level = Math.max(0, this._base.reservoir_level - 3);
-      }
-    }
-    isConnected() { return true; }
-    isStale() { return false; }
-  }
-
-  // -------------------------------------------------------------------------
   // LiveMockSource — believable drift. Moisture trickles down so the auto-
   // water threshold actually fires. Default source when no scenario picked.
   // -------------------------------------------------------------------------
@@ -224,5 +168,5 @@
     }
   }
 
-  root.HerbSources = { ScenarioSource, LiveMockSource, SerialSource, normalize };
+  root.HerbSources = { LiveMockSource, SerialSource, normalize };
 })(window);
