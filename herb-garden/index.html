@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#F4EFE6" />
-  <title>Herb Garden</title>
+  <meta name="theme-color" content="#FFFFFF" />
+  <title>Sprout and Spoon</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -18,20 +18,32 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+        <!-- Sprout and Spoon: a spoon bowl cradling a two-leaf sprout. -->
+        <svg viewBox="0 0 32 32" width="22" height="22" fill="none"
              stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
              stroke-linejoin="round">
-          <path d="M12 22V11"/>
-          <path d="M12 11c0-5 4-8 9-8-1 7-4 9-9 11z"/>
-          <path d="M12 14c0-3-3-5-7-5 1 5 3 7 7 8z"/>
+          <!-- spoon bowl -->
+          <ellipse cx="16" cy="22" rx="9" ry="6"/>
+          <!-- spoon handle -->
+          <path d="M16 28 V 30" />
+          <!-- sprout stem -->
+          <path d="M16 18 V 10" />
+          <!-- left leaf -->
+          <path d="M16 14 C 12 14, 9 12, 9 8 C 13 8, 16 10, 16 14 Z" fill="currentColor" stroke="none"/>
+          <!-- right leaf -->
+          <path d="M16 11 C 20 11, 23 9, 23 5 C 19 5, 16 7, 16 11 Z" fill="currentColor" stroke="none"/>
         </svg>
       </span>
-      <span>Herb Garden</span>
+      <span class="brand-wordmark">Sprout and Spoon</span>
     </div>
 
     <div class="topbar-right">
       <span class="conn-chip ok" id="conn-chip">
-        <span class="dot"></span><span id="conn-label">Connected</span>
+        <span class="dot"></span>
+        <span class="conn-text">
+          <span id="conn-label">Connected</span>
+          <span class="conn-sync" id="conn-sync"></span>
+        </span>
       </span>
     </div>
   </header>
@@ -39,7 +51,7 @@
   <!-- Demo banner (live mode, mock source only) -->
   <div class="banner" id="demo-banner">
     <span class="pill">Demo</span>
-    <span id="banner-msg">Using mock readings. Connect a real Arduino in <strong>Settings → Connection</strong>, or open the <strong>Test Mode</strong> tab to try scenarios manually.</span>
+    <span id="banner-msg">Using mock readings. Choose <strong>Adafruit IO</strong> or <strong>Live serial</strong> in <strong>Settings → Connection</strong>, or open the <strong>Test</strong> tab to try scenarios manually.</span>
   </div>
 
   <!-- Tab nav -->
@@ -70,6 +82,14 @@
           <path d="M12 14c0-3-3-5-7-5 1 5 3 7 7 8z"/>
         </svg>
         Plant
+      </button>
+      <button class="tab" data-tab="recipes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 2v10a4 4 0 0 0 4 4v6"/>
+          <path d="M7 2v6"/>
+          <path d="M17 2c-2 1-3 4-3 7v3a2 2 0 0 0 2 2h1v8"/>
+        </svg>
+        Recipes
       </button>
       <button class="tab" data-tab="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
@@ -106,6 +126,9 @@
             <span id="hero-status-icon" aria-hidden="true">🌿</span>
             <span id="hero-status">Your basil is thriving</span>
           </div>
+          <p class="demo-profile-note" id="demo-profile-note" hidden>
+            Demo profile — switch to Basil in Settings for live readings.
+          </p>
         </div>
 
         <div class="right-col">
@@ -173,17 +196,87 @@
     <!-- PLANT PROFILE -->
     <section class="panel" id="panel-profile">
       <h2>Plant profile</h2>
+
+      <div class="herb-picker" id="herb-picker">
+        <!-- Filled at runtime with the available herbs. Picking one
+             updates settings.selected_plant. -->
+      </div>
+
       <div class="card profile-card">
         <div class="header">
           <div class="art" id="profile-art"></div>
           <div>
             <h2 id="prof-name">Basil</h2>
             <p class="sci" id="prof-sci">Ocimum basilicum</p>
+            <p class="live-badge" id="prof-live-badge"></p>
           </div>
         </div>
         <p class="notes" id="prof-notes"></p>
-        <p class="section-title" style="margin-top:20px">Ideal ranges</p>
+
+        <p class="section-title" style="margin-top:22px">At a glance</p>
+        <div class="info-cards" id="info-cards"></div>
+
+        <p class="section-title" style="margin-top:22px">Ideal ranges</p>
         <div class="ranges" id="ranges"></div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <p class="card-title">Seasonality · UK</p>
+        <p class="muted small" id="season-headline">…</p>
+        <div class="season-grid" id="season-grid"></div>
+        <p class="muted small" style="margin-top:10px">Practical growing guidance, not a hard forecast.</p>
+      </div>
+    </section>
+
+    <!-- RECIPES -->
+    <section class="panel" id="panel-recipes">
+      <h2>Recipes</h2>
+
+      <div class="card growth-card">
+        <p class="card-title">Growth tracker</p>
+        <div class="growth-row">
+          <div class="growth-art" id="growth-art"></div>
+          <div class="growth-body">
+            <p class="muted small" id="growth-herb">Basil</p>
+            <h3 class="growth-headline" id="growth-headline">Day —</h3>
+            <p class="growth-stage" id="growth-stage">…</p>
+            <p class="growth-rec" id="growth-rec">…</p>
+          </div>
+        </div>
+        <div class="growth-bar"><span id="growth-bar-fill"></span></div>
+        <div class="growth-marks" id="growth-marks"></div>
+      </div>
+
+      <div class="card recipe-card" id="recipe-card">
+        <p class="card-title">Recipe of the day</p>
+        <h2 class="recipe-title" id="recipe-title">—</h2>
+        <p class="recipe-blurb" id="recipe-blurb">—</p>
+        <p class="section-title" style="margin-top:18px">Ingredients</p>
+        <ul class="ingredients" id="recipe-ingredients"></ul>
+        <p class="section-title" style="margin-top:18px">Method</p>
+        <ol class="method" id="recipe-method"></ol>
+        <div class="recipe-actions">
+          <button class="btn" id="shopping-btn" type="button">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 6h15l-2 9H7z"/><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M6 6L4 2H2"/>
+            </svg>
+            Shopping List
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- SHOPPING — sub-view of Recipes (no tab) -->
+    <section class="panel" id="panel-shopping">
+      <button class="back-link" id="back-to-recipe" type="button">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+        Return to Recipe
+      </button>
+      <h2 id="shopping-title">Shopping list</h2>
+      <p class="muted" id="shopping-subtitle">—</p>
+      <div class="card shopping-card">
+        <ul class="shopping" id="shopping-items"></ul>
+        <p class="muted small" id="shopping-status" style="margin-top:8px">—</p>
       </div>
     </section>
 
@@ -234,19 +327,100 @@
         <div class="field">
           <div>
             <label for="set-source">Data source</label>
-            <p class="hint">Mock data, scenarios, or live Arduino</p>
+            <p class="hint">Mock data, USB serial, or Adafruit IO over Wi-Fi</p>
           </div>
           <select id="set-source">
             <option value="mock">Mock / Demo</option>
-            <option value="serial">Live serial (Arduino)</option>
+            <option value="serial">COM port / Serial (Arduino)</option>
+            <option value="adafruit">Adafruit IO (Wi-Fi)</option>
           </select>
         </div>
+
+        <!-- Serial connection group -->
         <div class="field" id="serial-status-row">
           <div>
             <label>Serial port</label>
             <p class="hint" id="serial-port-hint">Not connected</p>
           </div>
           <button class="btn ghost" id="connect-serial">Connect Arduino</button>
+        </div>
+
+        <!-- Adafruit IO group (hidden unless adafruit is selected) -->
+        <div id="aio-config" hidden>
+          <div class="field">
+            <div>
+              <label for="aio-username">Adafruit IO username</label>
+              <p class="hint">Your io.adafruit.com account name</p>
+            </div>
+            <input id="aio-username" type="text" placeholder="your-username"/>
+          </div>
+          <div class="field">
+            <div>
+              <label for="aio-key">AIO key</label>
+              <p class="hint">Stored locally in your browser only</p>
+            </div>
+            <input id="aio-key" type="password" placeholder="aio_xxxxxxxx"/>
+          </div>
+          <div class="field">
+            <div>
+              <label for="aio-feed-moisture">Moisture feed</label>
+              <p class="hint">Feed key (not the human name)</p>
+            </div>
+            <input id="aio-feed-moisture" type="text" placeholder="soil-moisture"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-temperature">Temperature feed</label></div>
+            <input id="aio-feed-temperature" type="text" placeholder="temperature"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-humidity">Humidity feed</label></div>
+            <input id="aio-feed-humidity" type="text" placeholder="humidity"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-light">Light feed</label></div>
+            <input id="aio-feed-light" type="text" placeholder="light-level"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-reservoir">Reservoir feed</label></div>
+            <input id="aio-feed-reservoir" type="text" placeholder="water-reservoir"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-pump">Pump status feed</label></div>
+            <input id="aio-feed-pump" type="text" placeholder="pump-status"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-cmd">Water command feed</label></div>
+            <input id="aio-feed-cmd" type="text" placeholder="water-command"/>
+          </div>
+          <div class="field">
+            <div><label for="aio-feed-herb">Selected herb feed (optional)</label></div>
+            <input id="aio-feed-herb" type="text" placeholder="selected-herb"/>
+          </div>
+          <div class="field">
+            <div>
+              <label>Connection status</label>
+              <p class="hint" id="aio-status-hint">Not yet connected</p>
+            </div>
+            <button class="btn ghost" id="test-aio" type="button">Test connection</button>
+          </div>
+        </div>
+      </div>
+
+      <p class="section-title">Garden</p>
+      <div class="form">
+        <div class="field">
+          <div>
+            <label for="set-plant">Currently growing</label>
+            <p class="hint">Basil is wired to live readings. Others are demo profiles.</p>
+          </div>
+          <select id="set-plant"></select>
+        </div>
+        <div class="field">
+          <div>
+            <label for="set-planted-date">Planted date</label>
+            <p class="hint" id="planted-hint">Used by Recipes for growth tracking</p>
+          </div>
+          <input id="set-planted-date" type="date"/>
         </div>
       </div>
     </section>
@@ -378,6 +552,8 @@
 <script src="js/health.js"></script>
 <script src="js/storage.js"></script>
 <script src="js/sources.js"></script>
+<script src="js/recipes.js"></script>
+<script src="js/seasonality.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
