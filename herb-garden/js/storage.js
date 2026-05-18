@@ -1,11 +1,26 @@
-/* localStorage helpers for settings + event log. */
+/* localStorage helpers for Sprout and Spoon: settings, event log,
+ * test mode state, planted dates, shopping list check-state, and
+ * Adafruit IO configuration. Namespaced under "sproutandspoon.*". */
 (function (root) {
 
   const KEYS = {
-    settings: 'herbgarden.settings.v1',
-    events:   'herbgarden.events.v1',
-    waterTs:  'herbgarden.lastWaterTs.v1',
-    testMode: 'herbgarden.testMode.v1',
+    settings: 'sproutandspoon.settings.v1',
+    events:   'sproutandspoon.events.v1',
+    waterTs:  'sproutandspoon.lastWaterTs.v1',
+    testMode: 'sproutandspoon.testMode.v1',
+    planted:  'sproutandspoon.plantedDates.v1',
+    shopping: 'sproutandspoon.shopping.v1',
+  };
+
+  const DEFAULT_AIO_FEEDS = {
+    moisture:        'soil-moisture',
+    temperature:     'temperature',
+    humidity:        'humidity',
+    light:           'light-level',
+    reservoir:       'water-reservoir',
+    pump_status:     'pump-status',
+    water_command:   'water-command',
+    selected_herb:   'selected-herb',
   };
 
   const DEFAULTS = {
@@ -15,7 +30,11 @@
     low_reservoir_pct: 20,
     stale_after_s: 10,
     notifications_enabled: true,
-    data_source: 'mock',     // 'mock' | 'serial'
+    data_source: 'mock',                  // 'mock' | 'serial' | 'adafruit'
+    aio_username: '',
+    aio_key: '',
+    aio_feeds: { ...DEFAULT_AIO_FEEDS },
+    aio_poll_interval_s: 5,
   };
 
   function readJSON(key, fallback) {
@@ -27,7 +46,12 @@
   }
 
   function loadSettings() {
-    return { ...DEFAULTS, ...readJSON(KEYS.settings, {}) };
+    const stored = readJSON(KEYS.settings, {});
+    return {
+      ...DEFAULTS,
+      ...stored,
+      aio_feeds: { ...DEFAULT_AIO_FEEDS, ...(stored.aio_feeds || {}) },
+    };
   }
   function saveSettings(patch) {
     const next = { ...loadSettings(), ...patch };
@@ -66,11 +90,43 @@
     try { localStorage.setItem(KEYS.waterTs, String(ts)); } catch (_) {}
   }
 
+  function loadPlantedDates() { return readJSON(KEYS.planted, {}); }
+  function loadPlantedDate(plantId) {
+    const all = loadPlantedDates();
+    return all[plantId] || null;          // ISO date string or null
+  }
+  function savePlantedDate(plantId, iso) {
+    const all = loadPlantedDates();
+    all[plantId] = iso;
+    writeJSON(KEYS.planted, all);
+  }
+  // Ensure every herb has a planted date — default to today the first time.
+  function ensurePlantedDate(plantId) {
+    let iso = loadPlantedDate(plantId);
+    if (!iso) {
+      iso = new Date().toISOString().slice(0, 10);
+      savePlantedDate(plantId, iso);
+    }
+    return iso;
+  }
+
+  function loadShoppingState(recipeId) {
+    const all = readJSON(KEYS.shopping, {});
+    return all[recipeId] || {};           // { itemId: true, ... }
+  }
+  function saveShoppingState(recipeId, state) {
+    const all = readJSON(KEYS.shopping, {});
+    all[recipeId] = state;
+    writeJSON(KEYS.shopping, all);
+  }
+
   root.HerbStorage = {
-    DEFAULTS,
+    DEFAULTS, DEFAULT_AIO_FEEDS,
     loadSettings, saveSettings,
     loadEvents, addEvent, addEventAt, clearEvents, setEvents, lastOf,
     loadTestMode, saveTestMode,
     loadLastWaterTs, saveLastWaterTs,
+    loadPlantedDates, loadPlantedDate, savePlantedDate, ensurePlantedDate,
+    loadShoppingState, saveShoppingState,
   };
 })(window);

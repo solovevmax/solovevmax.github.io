@@ -1,8 +1,17 @@
-/* Main app: controller logic (auto-water, alerts) + UI rendering. */
+/* Sprout and Spoon — main app:
+ * - Live-mode controller (auto-water, alerts) for whichever data source the
+ *   user picks (LiveMock / Serial / Adafruit IO).
+ * - UI rendering for Home, Live, History, Plant Profile, Settings, Alerts,
+ *   Test Mode, Recipes, and the Shopping List sub-view.
+ * - Multi-herb gating: only Basil triggers live actions (auto-water, pump
+ *   commands, event log). Other herbs are info-only reference profiles.
+ */
 (function () {
-  const { PLANTS, SCENARIOS, ILLUSTRATIONS, getPlant } = window.HerbPlants;
+  const { PLANTS, SCENARIOS, ILLUSTRATIONS, getPlant, listPlants } = window.HerbPlants;
   const { computeHealth, bucket } = window.HerbHealth;
-  const { LiveMockSource, SerialSource } = window.HerbSources;
+  const { LiveMockSource, SerialSource, AdafruitIOSource } = window.HerbSources;
+  const { RECIPES, recipeOfTheDay, growthStage } = window.SproutRecipes;
+  const { currentSeason, herbSuitability } = window.SproutSeasonality;
   const S = window.HerbStorage;
 
   const $ = (sel) => document.querySelector(sel);
@@ -30,8 +39,27 @@
   let alertActive = { low_res: false, stale: false, off: false };
 
   function makeSource() {
-    if (settings.data_source === 'serial' && SerialSource.isSupported()) {
-      return new SerialSource(settings.stale_after_s * 1000);
+    try {
+      if (settings.data_source === 'serial' && SerialSource.isSupported()) {
+        return new SerialSource(settings.stale_after_s * 1000);
+      }
+      if (settings.data_source === 'adafruit') {
+        const src = new AdafruitIOSource({
+          username: settings.aio_username,
+          key: settings.aio_key,
+          feeds: settings.aio_feeds,
+          pollIntervalMs: (settings.aio_poll_interval_s || 5) * 1000,
+          staleAfterMs: (settings.stale_after_s || 10) * 1000 * 2,
+        });
+        if (!src.isConfigured()) {
+          // Fall back; the AIO config panel makes the missing-config obvious.
+          return new LiveMockSource();
+        }
+        return src;
+      }
+    } catch (e) {
+      // Any source construction failure → graceful demo fallback.
+      try { S.addEvent('alert', 'Data source failed to start: ' + (e.message || e)); } catch (_) {}
     }
     return new LiveMockSource();
   }
@@ -58,12 +86,14 @@
         }
       } else { alertActive.low_res = false; }
 
-      // Auto-water — skipped for static preview scenarios so the demo state
-      // stays stable. Manual "Water now" still works in all modes.
+      // Auto-water — only runs for the live-wired herb (basil) and never
+      // for reference-only herbs (parsley/thyme/mint).
       const lastTs = S.loadLastWaterTs();
       const cooldownOk = (now - lastTs) > settings.watering_cooldown_s * 1000;
       const haveWater = r.reservoir_level == null || r.reservoir_level >= settings.low_reservoir_pct;
-      if (source.allowAutoWater !== false
+      const liveWired = plant.live === true;
+      if (liveWired
+          && source.allowAutoWater !== false
           && r.moisture_pct != null
           && r.moisture_pct < settings.moisture_threshold_pct
           && cooldownOk
@@ -96,6 +126,12 @@
   }
 
   function triggerWatering(now, kind) {
+    if (!plant.live) {
+      // Suppress the device command for reference-only herbs. Still surface
+      // an info message so the user knows why nothing happened.
+      S.addEvent('info', `Watering disabled for ${plant.common_name}. Switch to Basil to trigger the pump.`);
+      return;
+    }
     const duration = 3000;
     source.sendCommand({ cmd: 'water', duration_ms: duration });
     S.saveLastWaterTs(now);
@@ -189,7 +225,7 @@
       else if (lux < 10000) { descr = 'Low light'; tileLight.classList.add('warn'); }
       else if (lux > 100000){ descr = 'Very intense'; tileLight.classList.add('warn'); }
       else if (lux > 50000) { descr = 'Bright sun'; }
-      else                  { descr = 'Ideal for basil'; }
+      else                  { descr = `Ideal for ${plant.common_name.toLowerCase()}`; }
       $('#light-sub').textContent = descr;
     }
 
@@ -208,6 +244,17 @@
         <div class="mv">${formatted == null ? '<span class="missing">—</span>' : formatted + def.unit}</div>
       </div>`;
     }).join('');
+
+    // Demo-profile note for non-basil reference herbs.
+    const demoNote = $('#demo-profile-note');
+    if (demoNote) demoNote.hidden = !!plant.live;
+
+    // Disable Water now for non-live herbs (since the pump isn't wired to them).
+    const waterBtn = $('#water-btn');
+    if (waterBtn) {
+      waterBtn.disabled = !plant.live;
+      waterBtn.title = plant.live ? '' : `Switch to Basil in Settings to water the live garden.`;
+    }
   }
 
   function subscoresHint(subs) {
@@ -293,12 +340,52 @@
     </div>`;
   }
 
-  // Plant profile
+  // Plant profile — herb picker + hero + info cards + ranges + seasonality.
   function renderProfile() {
+    renderHerbPicker();
     $('#profile-art').innerHTML = ILLUSTRATIONS[plant.illustration];
     $('#prof-name').textContent = plant.common_name;
     $('#prof-sci').textContent = plant.scientific_name;
     $('#prof-notes').textContent = plant.notes;
+
+    // Live badge
+    const liveBadge = $('#prof-live-badge');
+    if (liveBadge) {
+      if (plant.live) {
+        liveBadge.className = 'live-badge';
+        liveBadge.textContent = 'Live wired to garden';
+      } else {
+        liveBadge.className = 'live-badge demo';
+        liveBadge.textContent = 'Demo / reference profile';
+      }
+    }
+
+    // Info cards
+    const ICON = {
+      moisture:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>',
+      light:          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2"/></svg>',
+      temperature:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 0-4 0v9.5a4 4 0 1 0 4 0z"/></svg>',
+      grow_time:      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+      harvest_timing: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7l8 4 8-4"/><path d="M4 12l8 4 8-4"/><path d="M4 17l8 4 8-4"/></svg>',
+      care_notes:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M21 12v6a2 2 0 0 1-2 2H6a3 3 0 0 1-3-3V6a2 2 0 0 1 2-2h11"/></svg>',
+    };
+    const infoOrder = [
+      ['moisture',       'Ideal moisture'],
+      ['light',          'Ideal light'],
+      ['temperature',    'Ideal temperature'],
+      ['grow_time',      'Grow time'],
+      ['harvest_timing', 'Harvest timing'],
+      ['care_notes',     'Care notes'],
+    ];
+    const info = plant.info || {};
+    $('#info-cards').innerHTML = infoOrder.map(([key, label]) =>
+      `<div class="info-card">
+        <div class="ic-label"><span class="ic-icon">${ICON[key]}</span>${label}</div>
+        <div class="ic-value">${info[key] || '—'}</div>
+      </div>`
+    ).join('');
+
+    // Ideal-ranges table (existing)
     const rows = [
       `<div class="range-row head"><span>Metric</span><span>Ideal</span><span>OK range</span><span>Weight</span></div>`,
     ];
@@ -324,27 +411,99 @@
       <span class="rw">${(plant.weights.reservoir * 100).toFixed(0)}%</span>
     </div>`);
     $('#ranges').innerHTML = rows.join('');
+
+    renderSeasonality();
   }
 
-  // Connection chip + demo banner (live mode only)
+  function renderHerbPicker() {
+    const picker = $('#herb-picker');
+    if (!picker) return;
+    const all = listPlants();
+    picker.innerHTML = all.map(p =>
+      `<button class="herb-pick${p.id === plant.id ? ' active' : ''}${p.live ? ' live' : ''}"
+               data-plant="${p.id}" type="button">
+         <span class="herb-dot"></span>
+         <span>${p.common_name}</span>
+       </button>`
+    ).join('');
+    picker.querySelectorAll('.herb-pick').forEach(btn => {
+      btn.addEventListener('click', () => switchPlant(btn.dataset.plant));
+    });
+  }
+
+  function renderSeasonality() {
+    const season = currentSeason();
+    $('#season-headline').textContent = `Right now in the UK: ${season}`;
+    const list = herbSuitability(season);
+    $('#season-grid').innerHTML = list.map(item => {
+      const name = PLANTS[item.id]?.common_name || item.id;
+      const initial = name.charAt(0);
+      return `<div class="season-row tier-${item.tier}">
+        <span class="leaf">${initial}</span>
+        <div>
+          <div class="s-name">${name} <span style="color:var(--muted);font-weight:500;font-size:12px">· ${item.tier}</span></div>
+          <div class="s-tip">${item.tip}</div>
+        </div>
+        <div class="s-grow">${item.grow_hint}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function switchPlant(plantId) {
+    if (!PLANTS[plantId] || plantId === plant.id) return;
+    settings = S.saveSettings({ selected_plant: plantId });
+    plant = getPlant(plantId);
+    S.ensurePlantedDate(plantId);
+    // Tell Adafruit IO (best-effort) which herb is now selected.
+    if (source instanceof AdafruitIOSource && source.publishSelectedHerb) {
+      source.publishSelectedHerb(plantId);
+    }
+    renderHerbPicker();
+    render();
+    renderProfile();
+    renderRecipes();
+    renderSettings();
+  }
+
+  // Connection chip + demo banner.
+  // Labels reflect the active source type: Adafruit IO / Serial / Demo / Stale / Disconnected.
   function renderConn(state) {
     const chip = $('#conn-chip');
     const label = $('#conn-label');
+    const sync  = $('#conn-sync');
     chip.classList.remove('ok', 'stale', 'off');
-    const isDemo = !(source instanceof SerialSource);
+
+    let labelText, isLiveSource = false;
+    if (source instanceof SerialSource) {
+      labelText = 'Connected (Serial)'; isLiveSource = true;
+    } else if (source instanceof AdafruitIOSource) {
+      labelText = 'Connected (Adafruit IO)'; isLiveSource = true;
+    } else {
+      labelText = 'Demo (mock)';
+    }
+
     if (state.stale) {
       chip.classList.add('stale'); label.textContent = 'Stale data';
     } else if (state.connected) {
       chip.classList.add('ok');
-      label.textContent = isDemo ? 'Demo (mock)' : 'Connected';
+      label.textContent = labelText;
     } else {
-      chip.classList.add('off'); label.textContent = 'Disconnected';
+      chip.classList.add('off');
+      label.textContent = (source instanceof AdafruitIOSource)
+        ? 'AIO not connected' : 'Disconnected';
     }
-    // Demo banner is only shown when the active panel is a live one and we're
-    // not on real Arduino data. Test Mode hides it (it has its own SIM note).
+
+    // Last-sync subtext (from the source's own lastSyncMs).
+    if (sync) {
+      const ms = (source.lastSyncMs && source.lastSyncMs()) || 0;
+      sync.textContent = ms ? `Last sync · ${fmtAgo(new Date(ms).toISOString())}` : '';
+    }
+
+    // Demo banner only shows in live tabs while running on mock data.
     const banner = $('#demo-banner');
     const onTestMode = $('#panel-test-mode').classList.contains('active');
-    if (isDemo && !onTestMode) banner.classList.remove('hidden');
+    const isMock = !(source instanceof SerialSource || source instanceof AdafruitIOSource);
+    if (isMock && !onTestMode) banner.classList.remove('hidden');
     else banner.classList.add('hidden');
   }
 
@@ -356,6 +515,10 @@
     $('#set-notifs').checked = settings.notifications_enabled;
     $('#sw-notifs').classList.toggle('on', settings.notifications_enabled);
     $('#set-source').value = settings.data_source;
+
+    // Serial group: visible when source = serial
+    const serialRow = $('#serial-status-row');
+    if (serialRow) serialRow.hidden = settings.data_source !== 'serial';
     const supported = SerialSource.isSupported();
     const btn = $('#connect-serial');
     if (!supported) {
@@ -370,6 +533,47 @@
       $('#serial-port-hint').textContent =
         settings.data_source === 'serial' ? 'Click Connect to choose a port.' : 'Not connected';
     }
+
+    // Adafruit IO group: visible when source = adafruit
+    const aioCfg = $('#aio-config');
+    if (aioCfg) aioCfg.hidden = settings.data_source !== 'adafruit';
+    $('#aio-username').value = settings.aio_username || '';
+    $('#aio-key').value = settings.aio_key || '';
+    const f = settings.aio_feeds || {};
+    $('#aio-feed-moisture').value    = f.moisture      || '';
+    $('#aio-feed-temperature').value = f.temperature   || '';
+    $('#aio-feed-humidity').value    = f.humidity      || '';
+    $('#aio-feed-light').value       = f.light         || '';
+    $('#aio-feed-reservoir').value   = f.reservoir     || '';
+    $('#aio-feed-pump').value        = f.pump_status   || '';
+    $('#aio-feed-cmd').value         = f.water_command || '';
+    $('#aio-feed-herb').value        = f.selected_herb || '';
+    if (source instanceof AdafruitIOSource) {
+      const hint = $('#aio-status-hint');
+      hint.className = 'hint ' + (source.isConnected() ? 'aio-status-ok' : 'aio-status-error');
+      if (source.isConnected()) {
+        const t = source.lastSyncMs && source.lastSyncMs();
+        hint.textContent = t ? `Connected — last sync ${fmtAgo(new Date(t).toISOString())}` : 'Connected';
+      } else {
+        hint.textContent = source.lastError ? (source.lastError() || 'Waiting for first sync…') : 'Not connected';
+      }
+    } else if (settings.data_source === 'adafruit') {
+      const hint = $('#aio-status-hint');
+      hint.className = 'hint';
+      hint.textContent = 'Save the settings, then click Test connection.';
+    }
+
+    // Garden: herb dropdown + planted date
+    const plantSel = $('#set-plant');
+    if (plantSel) {
+      plantSel.innerHTML = listPlants().map(p =>
+        `<option value="${p.id}"${p.id === settings.selected_plant ? ' selected' : ''}>${p.common_name}${p.live ? ' · live' : ''}</option>`
+      ).join('');
+    }
+    const planted = S.ensurePlantedDate(settings.selected_plant);
+    $('#set-planted-date').value = planted;
+    const liveStr = plant.live ? 'Live wired to garden' : 'Demo / reference profile';
+    $('#planted-hint').textContent = `Used by Recipes for growth tracking · ${liveStr}`;
   }
 
   // Master render
@@ -402,7 +606,9 @@
       if (t === 'profile') renderProfile();
       if (t === 'settings') renderSettings();
       if (t === 'live') render();
+      if (t === 'recipes') renderRecipes();
       if (t === 'test-mode') renderTestMode();
+      // Shopping is a sub-view of Recipes; never reached via tab.
       // Re-render conn so the demo banner shows/hides per tab
       const r = source.getLatest();
       renderConn({
@@ -461,6 +667,54 @@
     } catch (err) {
       $('#serial-port-hint').textContent = 'Connection cancelled or failed.';
     }
+  });
+
+  // Adafruit IO field bindings
+  function bindAioField(id, key) {
+    $(id).addEventListener('change', (e) => {
+      settings = S.saveSettings({ [key]: e.target.value.trim() });
+    });
+  }
+  bindAioField('#aio-username', 'aio_username');
+  bindAioField('#aio-key',      'aio_key');
+
+  function bindAioFeed(id, feedKey) {
+    $(id).addEventListener('change', (e) => {
+      const feeds = { ...(settings.aio_feeds || {}), [feedKey]: e.target.value.trim() };
+      settings = S.saveSettings({ aio_feeds: feeds });
+    });
+  }
+  bindAioFeed('#aio-feed-moisture',    'moisture');
+  bindAioFeed('#aio-feed-temperature', 'temperature');
+  bindAioFeed('#aio-feed-humidity',    'humidity');
+  bindAioFeed('#aio-feed-light',       'light');
+  bindAioFeed('#aio-feed-reservoir',   'reservoir');
+  bindAioFeed('#aio-feed-pump',        'pump_status');
+  bindAioFeed('#aio-feed-cmd',         'water_command');
+  bindAioFeed('#aio-feed-herb',        'selected_herb');
+
+  $('#test-aio').addEventListener('click', async () => {
+    settings = S.saveSettings({ data_source: 'adafruit' });
+    rebuildSource();
+    renderSettings();
+    // Force an immediate poll attempt and then re-render the status.
+    if (source instanceof AdafruitIOSource) {
+      const hint = $('#aio-status-hint');
+      hint.className = 'hint'; hint.textContent = 'Connecting…';
+      // give the immediate _pollOnce() inside start() a moment to complete
+      setTimeout(() => { renderSettings(); render(); }, 800);
+    }
+  });
+
+  // Herb dropdown in Settings
+  $('#set-plant').addEventListener('change', (e) => switchPlant(e.target.value));
+
+  // Planted date input
+  $('#set-planted-date').addEventListener('change', (e) => {
+    const iso = e.target.value;
+    if (!iso) return;
+    S.savePlantedDate(plant.id, iso);
+    renderRecipes();
   });
 
   // ------------------------------------------------------------------------
@@ -697,13 +951,108 @@
     renderTestPreview();
   }
 
+  // ------------------------------------------------------------------------
+  // RECIPES + SHOPPING (sub-view)
+  // ------------------------------------------------------------------------
+
+  let _currentRecipeId = null;
+
+  function renderRecipes() {
+    const plantedIso = S.ensurePlantedDate(plant.id);
+    $('#growth-art').innerHTML = ILLUSTRATIONS[plant.illustration];
+    $('#growth-herb').textContent = `Growing: ${plant.common_name}${plant.live ? '' : ' · demo profile'}`;
+    const g = growthStage(plantedIso, plant);
+    $('#growth-headline').textContent = `Day ${g.days}`;
+    $('#growth-stage').textContent = g.stage;
+    $('#growth-rec').textContent = g.recommendation;
+    // Progress bar: 0..harvest threshold
+    const thresholds = plant.grow_time_days;
+    const harvestDay = thresholds.harvest;
+    const pct = Math.max(0, Math.min(100, (g.days / harvestDay) * 100));
+    $('#growth-bar-fill').style.width = pct + '%';
+    $('#growth-marks').innerHTML = [
+      ['Seedling',     g.days >= 0],
+      ['Vegetative',   g.days >= thresholds.seedling],
+      ['Maturing',     g.days >= thresholds.vegetative],
+      ['Harvest',      g.days >= thresholds.mature],
+    ].map(([lbl, reached]) =>
+      `<span class="${reached ? 'reached' : ''}">${lbl}</span>`
+    ).join('');
+
+    // Recipe of the day
+    const r = recipeOfTheDay(plant.id);
+    _currentRecipeId = r.id;
+    $('#recipe-title').textContent = r.title;
+    $('#recipe-blurb').textContent = r.blurb;
+    $('#recipe-ingredients').innerHTML = r.ingredients
+      .map(i => `<li>${i.text}</li>`).join('');
+    $('#recipe-method').innerHTML = r.method.map(s => `<li>${s}</li>`).join('');
+  }
+
+  // Shopping List sub-view (no tab; navigated via in-app push)
+  function goToShopping() {
+    if (!_currentRecipeId) renderRecipes();
+    $('#panel-recipes').classList.remove('active');
+    $('#panel-shopping').classList.add('active');
+    // Keep the Recipes tab visually active
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    const recipesTab = document.querySelector('.tab[data-tab="recipes"]');
+    if (recipesTab) recipesTab.classList.add('active');
+    renderShopping();
+  }
+  function returnToRecipe() {
+    $('#panel-shopping').classList.remove('active');
+    $('#panel-recipes').classList.add('active');
+  }
+  function renderShopping() {
+    const recipe = currentRecipe();
+    if (!recipe) return;
+    $('#shopping-title').textContent = 'Shopping list';
+    $('#shopping-subtitle').textContent = `For: ${recipe.title}`;
+    const state = S.loadShoppingState(recipe.id);
+    const items = recipe.ingredients;
+    $('#shopping-items').innerHTML = items.map(i => {
+      const checked = !!state[i.id];
+      return `<li class="${checked ? 'checked' : ''}" data-id="${i.id}">
+        <span class="check"><svg viewBox="0 0 24 24"><path d="M5 12l4 4 10-10"/></svg></span>
+        <span class="text">${i.text}</span>
+      </li>`;
+    }).join('');
+    const done = items.filter(i => state[i.id]).length;
+    $('#shopping-status').textContent = `${done} of ${items.length} checked off`;
+    // Wire item clicks
+    $('#shopping-items').querySelectorAll('li').forEach(li => {
+      li.addEventListener('click', () => {
+        const id = li.dataset.id;
+        const cur = S.loadShoppingState(recipe.id);
+        cur[id] = !cur[id];
+        S.saveShoppingState(recipe.id, cur);
+        renderShopping();
+      });
+    });
+  }
+  function currentRecipe() {
+    if (!_currentRecipeId) return null;
+    for (const list of Object.values(RECIPES)) {
+      const found = list.find(r => r.id === _currentRecipeId);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  // Recipe / Shopping wiring
+  $('#shopping-btn').addEventListener('click', goToShopping);
+  $('#back-to-recipe').addEventListener('click', returnToRecipe);
+
   renderPresets();
   bindSliders();
 
   // First paint
+  S.ensurePlantedDate(plant.id);
   renderSettings();
   renderProfile();
   renderHistory();
+  renderRecipes();
   render();
   renderTestMode();
   setInterval(tick, 1000);

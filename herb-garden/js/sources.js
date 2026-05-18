@@ -96,6 +96,7 @@
     sendCommand(cmd) { if (cmd && cmd.cmd === 'water') this._pendingPumpEvent = true; }
     isConnected() { return true; }
     isStale() { return false; }
+    lastSyncMs() { return Date.now(); }  // always fresh
   }
 
   // -------------------------------------------------------------------------
@@ -166,7 +167,165 @@
         && this._lastUpdate > 0
         && (Date.now() - this._lastUpdate) > this._staleAfter;
     }
+    lastSyncMs() { return this._lastUpdate; }
   }
 
-  root.HerbSources = { LiveMockSource, SerialSource, normalize };
+  // -------------------------------------------------------------------------
+  // AdafruitIOSource — HTTP REST polling against io.adafruit.com.
+  // Telemetry feeds are GETted in parallel each tick; the water command POSTs
+  // to a single command feed. Same DataSource interface as the others.
+  // -------------------------------------------------------------------------
+  class AdafruitIOSource {
+    constructor(config) {
+      // config: { username, key, feeds: { moisture, temperature, humidity,
+      //          light, reservoir, pump_status, water_command, selected_herb },
+      //          pollIntervalMs, staleAfterMs }
+      this.username = (config.username || '').trim();
+      this.key = (config.key || '').trim();
+      this.feeds = config.feeds || {};
+      this._pollMs = config.pollIntervalMs || 5000;
+      this._staleAfter = config.staleAfterMs || 15000;
+      this._timer = null;
+      this._reading = null;
+      this._lastSyncTs = 0;
+      this._lastError = null;
+      this._connected = false;
+      this._inFlight = false;
+      this.sourceLabel = 'Adafruit IO';
+      this.allowAutoWater = true;
+    }
+    isConfigured() {
+      return Boolean(this.username && this.key);
+    }
+    _url(feedKey) {
+      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
+             `/feeds/${encodeURIComponent(feedKey)}/data/last`;
+    }
+    _cmdUrl(feedKey) {
+      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
+             `/feeds/${encodeURIComponent(feedKey)}/data`;
+    }
+    async _fetchLast(feedKey) {
+      if (!feedKey) return null;
+      try {
+        const r = await fetch(this._url(feedKey), {
+          headers: { 'X-AIO-Key': this.key, 'Accept': 'application/json' },
+        });
+        if (!r.ok) {
+          // 404 = feed not yet created, treat as no data, not as error
+          if (r.status === 404) return null;
+          throw new Error(`AIO ${feedKey}: HTTP ${r.status}`);
+        }
+        return await r.json();   // { id, value, created_at, feed_id, ... }
+      } catch (e) {
+        this._lastError = e.message || String(e);
+        return null;
+      }
+    }
+    async _pollOnce() {
+      if (this._inFlight) return;
+      this._inFlight = true;
+      try {
+        const f = this.feeds;
+        const [m, t, h, l, r, p] = await Promise.all([
+          this._fetchLast(f.moisture),
+          this._fetchLast(f.temperature),
+          this._fetchLast(f.humidity),
+          this._fetchLast(f.light),
+          this._fetchLast(f.reservoir),
+          this._fetchLast(f.pump_status),
+        ]);
+        // If every feed call returned null AND we have no prior reading,
+        // treat that as not-yet-connected. Otherwise build the merged frame.
+        if (!m && !t && !h && !l && !r && !p && !this._reading) {
+          this._connected = false;
+          return;
+        }
+        const latest = newest([m, t, h, l, r, p]);
+        const raw = {
+          timestamp:       latest ? latest.created_at : new Date().toISOString(),
+          moisture_pct:    m ? m.value : null,
+          temperature_c:   t ? t.value : null,
+          humidity_pct:    h ? h.value : null,
+          light_lux:       l ? l.value : null,
+          reservoir_level: r ? r.value : null,
+          ph:              null,   // optional in this prototype
+          pump_event:      p && /complete|done|ok/i.test(String(p.value)) ? 'completed' : null,
+        };
+        this._reading = normalize(raw);
+        this._lastSyncTs = Date.now();
+        this._connected = true;
+        this._lastError = null;
+      } finally {
+        this._inFlight = false;
+      }
+    }
+    start() {
+      if (!this.isConfigured()) {
+        this._lastError = 'Adafruit IO username and key required';
+        return;
+      }
+      if (this._timer) return;
+      this._pollOnce();        // immediate first poll
+      this._timer = setInterval(() => this._pollOnce(), this._pollMs);
+    }
+    stop() {
+      if (this._timer) { clearInterval(this._timer); this._timer = null; }
+      this._connected = false;
+    }
+    getLatest() { return this._reading; }
+    async sendCommand(cmd) {
+      if (!cmd || cmd.cmd !== 'water') return;
+      const feed = this.feeds.water_command;
+      if (!feed) return;
+      const value = `water:${cmd.duration_ms || 3000}`;
+      try {
+        await fetch(this._cmdUrl(feed), {
+          method: 'POST',
+          headers: {
+            'X-AIO-Key': this.key,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ value }),
+        });
+      } catch (e) {
+        this._lastError = e.message || String(e);
+      }
+    }
+    // Optional: publish the currently selected herb so the device knows.
+    async publishSelectedHerb(plantId) {
+      const feed = this.feeds.selected_herb;
+      if (!feed || !this.isConfigured()) return;
+      try {
+        await fetch(this._cmdUrl(feed), {
+          method: 'POST',
+          headers: {
+            'X-AIO-Key': this.key,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ value: plantId }),
+        });
+      } catch (_) { /* best-effort */ }
+    }
+    isConnected() { return this._connected && !this.isStale(); }
+    isStale() {
+      return this._lastSyncTs > 0 && (Date.now() - this._lastSyncTs) > this._staleAfter;
+    }
+    lastSyncMs() { return this._lastSyncTs; }
+    lastError() { return this._lastError; }
+  }
+
+  function newest(items) {
+    let best = null;
+    for (const it of items) {
+      if (!it || !it.created_at) continue;
+      if (!best || it.created_at > best.created_at) best = it;
+    }
+    return best;
+  }
+
+  root.HerbSources = {
+    LiveMockSource, SerialSource, AdafruitIOSource, normalize,
+  };
 })(window);

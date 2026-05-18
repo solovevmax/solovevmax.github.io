@@ -1,22 +1,24 @@
-# Herb Garden — local prototype
+# Sprout and Spoon — local prototype
 
-A calm, mobile-first prototype for a self-watering smart herb garden.
-**Pure static site** — no backend, no build step. The live monitoring
-app and the new **Test Mode** sandbox are two completely separate
-experiences. Designed to later connect to an Arduino Nano RP2040
-Connect over USB serial; ready to host as a static page (e.g. GitHub
-Pages) without changes.
+A calm, mobile-first kitchen-garden companion app. **Pure static site** —
+no backend, no build step. Designed to talk to an Arduino Nano RP2040
+Connect over USB serial (COM port) **or** Adafruit IO over Wi-Fi, with a
+demo data path that always works as a fallback.
 
-## Two modes
+## Highlights
 
-| Mode             | What it is                                   | Data source                  | Touches history? |
-|------------------|----------------------------------------------|------------------------------|------------------|
-| **Live mode**    | The real monitoring app (Home, Live Data, History, Plant Profile, Settings, Alerts) | `LiveMockSource` (drifting mock) → swap to Arduino in Settings | Yes — real events log |
-| **Test Mode tab**| Manual sandbox for UI / logic evaluation     | Whatever values you enter via sliders + presets | No — fully isolated |
-
-A clear `SIMULATED` pill at the top of Test Mode reminds you it's
-manual data, not from the live system. Live mode keeps a `Demo (mock)`
-chip in the header while you haven't connected a real Arduino yet.
+- **Two comms paths + demo**: COM serial (Web Serial) and Adafruit IO
+  (HTTP REST polling) — selectable in Settings. If neither is configured
+  the app falls back to a believable demo source.
+- **Four herbs**: Basil (live, wired to the smart garden), plus Parsley,
+  Thyme and Mint as informational reference profiles.
+- **Recipes tab** with per-herb growth tracking from a planted date,
+  growth-stage recommendations, a rotating Recipe of the Day per herb,
+  and a Shopping List sub-view with persistent check-state.
+- **UK Seasonality** card inside Plant Profile — detects season from
+  today's date and ranks herbs by suitability with practical tips.
+- **Test Mode** stays as a fully-isolated manual sandbox for UI / logic
+  evaluation.
 
 ## Run it locally
 
@@ -27,162 +29,125 @@ python3 -m http.server 8000
 
 Open <http://localhost:8000>.
 
-A local server is needed (separate JS files + Web Serial needs a secure
-context — `localhost` qualifies). Any static server works: `npx serve`,
-`php -S 0.0.0.0:8000`, etc.
+Any static server works (`npx serve`, `php -S`, etc). A server is needed
+because the JS is split into multiple files and Web Serial requires a
+secure context — `localhost` qualifies.
 
 ## Open it on your phone for UI testing
 
-Both your computer and phone must be on the **same Wi-Fi network**.
+Both devices on the same Wi-Fi network:
 
-1. **Start the server bound to all interfaces.** `python3 -m http.server`
-   already listens on `0.0.0.0` by default (i.e. on every network
-   interface), so the command above is enough. To be explicit:
+1. `python3 -m http.server 8000 --bind 0.0.0.0` (the default `0.0.0.0`
+   already binds to every interface; `--bind` is just explicit).
+2. Find your computer's local IP:
+   - macOS (Wi-Fi): `ipconfig getifaddr en0`
+   - Linux: `hostname -I`
+   - Windows: `ipconfig` → IPv4 line of the Wi-Fi adapter
+3. Open `http://<your-local-ip>:8000` on your phone.
+4. If unreachable, allow port 8000 through your computer's firewall
+   (macOS Firewall settings; Windows Defender → "Allow an app";
+   Linux `sudo ufw allow 8000/tcp`).
 
-   ```bash
-   python3 -m http.server 8000 --bind 0.0.0.0
-   ```
+## Where everything is configured
 
-2. **Find your computer's local IP address:**
+| What                | Where                                                    |
+|---------------------|----------------------------------------------------------|
+| **Adafruit IO**     | Settings → Connection (pick "Adafruit IO (Wi-Fi)" → fill username, key, feed names) — stored locally in `localStorage` keys `sproutandspoon.settings.v1` |
+| **COM / Serial**    | Settings → Connection (pick "COM port / Serial (Arduino)" → "Connect Arduino" button uses Web Serial, Chrome/Edge only) |
+| **Herb data**       | `js/plants.js` — the `PLANTS` object (basil/parsley/thyme/mint) + `ILLUSTRATIONS` SVG map |
+| **Recipe data**     | `js/recipes.js` — `RECIPES` keyed by herb id (3 recipes each, edit / add freely) |
+| **Shopping list**   | Derived from a recipe's `ingredients` array; check-state persists in localStorage key `sproutandspoon.shopping.v1` |
+| **Seasonality**     | `js/seasonality.js` — `TABLE` (per-herb / per-season tier + tip) and `GROW_HINT` |
+| **Planted dates**   | Settings → Garden ("Planted date" input). Persists per herb in `sproutandspoon.plantedDates.v1` |
+| **Plant Health**    | `js/health.js` — the scoring formula (unchanged from prior milestones) |
 
-   - **macOS** (Wi-Fi): `ipconfig getifaddr en0`
-     If you're on a wired Mac, try `en1` or use `ifconfig | grep "inet "`.
-   - **Linux**: `hostname -I` (usually the first IP listed).
-   - **Windows**: `ipconfig` and look at the IPv4 line of your Wi-Fi
-     adapter — something like `192.168.x.x` or `10.0.x.x`.
+## Adafruit IO setup
 
-   You're looking for a private LAN address: typically starts with
-   `192.168.`, `10.`, or `172.16–31.`.
+In Settings → Connection, pick **Adafruit IO (Wi-Fi)** and fill in:
 
-3. **Open `http://<your-local-ip>:8000` on your phone's browser.**
-   Example: `http://192.168.1.42:8000`. The full app loads, including
-   Test Mode.
+- **Username**: your `io.adafruit.com` account name.
+- **AIO key**: from `io.adafruit.com/my-key`. Stored only in your browser
+  via `localStorage`.
+- **Feed keys** for the 8 fields: moisture, temperature, humidity, light,
+  reservoir, pump-status, water-command, selected-herb (optional). These
+  are the *feed keys* (URL slugs) — not the human display names.
 
-4. **If the phone can't reach it,** the culprit is almost always your
-   computer's firewall blocking port 8000:
+The Arduino publishes telemetry to the read-only feeds (~1 Hz works
+well). The app polls each feed via REST (`/data/last`) every 5 seconds
+and POSTs the water command to the `water_command` feed as a string
+value like `"water:3000"`.
 
-   - **macOS**: System Settings → Network → Firewall → allow incoming
-     connections for `Python`, or temporarily turn the firewall off.
-   - **Windows**: Windows Security → Firewall & network protection →
-     Allow an app through firewall → add Python for the *Private*
-     network. Or run the dev server through the WSL2 console if
-     applicable.
-   - **Linux** (ufw): `sudo ufw allow 8000/tcp` (only while testing).
-   - Some public/guest Wi-Fi networks (cafés, hotels, school) block
-     device-to-device traffic. Use a phone hotspot or a home/private
-     network in that case.
+## Serial schema (unchanged)
 
-> Hot reload tip: edit a file, then just refresh the page on your
-> phone. No restart needed.
+When using **COM port / Serial**, the Arduino emits one JSON object per
+line at 115200 baud:
 
-## Test Mode tour
-
-The Test tab gives you:
-
-- **Scenario presets** (chips, horizontally scrollable): Healthy basil,
-  Dry soil, Overly wet soil, Low reservoir, Poor light, Low temperature,
-  High temperature, Low pH, High pH. Each one only **populates the
-  sliders** — you can edit any value afterward.
-- **Sensor inputs** (sliders + numeric overlay): soil moisture,
-  temperature, humidity, soil pH (+ a "pH sensor present" toggle),
-  light intensity in lux, reservoir level, last-watered minutes ago.
-- **Live preview** that recomputes instantly: Plant Health gauge, plain-
-  English status summary, last-watered tile, reservoir tile with bar,
-  light tile with descriptor, key-metric chips, full sub-scores
-  breakdown showing exactly how the formula sees each metric, and the
-  alerts that *would* trigger at those values (low reservoir,
-  auto-water trigger, temperature out of safe range, etc.).
-- **Reset to Healthy preset** button.
-
-State is persisted to `localStorage` so your last Test Mode setup
-survives a reload, but it never leaks into the live history or
-last-watered time.
-
-## Switch to a live Arduino
-
-1. **Settings → Connection** → set *Data source* to **Live serial
-   (Arduino)**.
-2. Click **Connect Arduino**. Use Chrome or Edge (Web Serial requires
-   them). Pick the port.
-3. The Arduino must emit one JSON object per line at 115200 baud (see
-   schema below). The "Demo (mock)" chip turns into a green
-   "Connected" chip when frames start arriving.
-
-## Serial schema
-
-**Arduino → app** (~1 Hz, one JSON object per line):
 ```json
 {"timestamp":"2026-05-17T12:34:56Z","moisture":42.3,"temperature":22.1,
  "humidity":55,"ph":6.5,"light_lux":12000,"reservoir_level":80,
  "pump_event":null}
 ```
 
-**Arduino → app** when pump completes (optional echo):
-```json
-{"timestamp":"...","pump_event":"completed","moisture":...}
-```
-
-**App → Arduino** (command):
+App → Arduino command:
 ```json
 {"cmd":"water","duration_ms":3000}
 ```
 
-Missing fields → `null` and rendered as "— no data —". Out-of-range
-values (e.g. moisture = -5) are silently rejected. No frame within 10 s
-→ stale-data alert + the connection chip turns amber.
+Out-of-range and malformed values are scrubbed at the source layer
+(`js/sources.js` → `normalize()` / `clean()`).
 
-## File structure
+## Architecture
 
 ```
 herb-garden/
 ├── index.html
 ├── styles.css
 ├── js/
-│   ├── plants.js      # Plant DB (basil) + SCENARIOS (used by Test Mode presets)
-│   ├── health.js      # Plant Health formula
-│   ├── sources.js     # LiveMockSource | SerialSource (live mode only)
-│   ├── storage.js     # localStorage helpers (settings, events, test mode)
-│   └── app.js         # Live-mode controller + UI rendering + Test Mode sandbox
+│   ├── plants.js        # PLANTS DB + Test Mode SCENARIOS + ILLUSTRATIONS
+│   ├── health.js        # Plant Health formula (unchanged)
+│   ├── storage.js       # localStorage wrappers (sproutandspoon.*)
+│   ├── sources.js       # LiveMockSource | SerialSource | AdafruitIOSource
+│   ├── recipes.js       # RECIPES + recipeOfTheDay() + growthStage()
+│   ├── seasonality.js   # currentSeason() + herbSuitability() (UK)
+│   └── app.js           # Controller + UI rendering + tab routing
 └── README.md
 ```
 
-## Plant Health formula
+The DataSource interface — `start / stop / getLatest / sendCommand /
+isConnected / isStale / sourceLabel / lastSyncMs / allowAutoWater` —
+is the only seam the comms layer needs. Adding another transport (e.g.
+local MQTT) means writing one new class implementing that shape and
+adding a branch in `makeSource()` in `js/app.js`.
+
+## Multi-herb behavior
+
+| Herb     | live wiring | auto-water | event log writes | info cards | recipes |
+|----------|-------------|------------|------------------|------------|---------|
+| Basil    | ✓           | ✓          | ✓                | ✓          | ✓       |
+| Parsley  | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
+| Thyme    | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
+| Mint     | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
+
+Selecting a non-basil herb shows the "Demo profile" note on Home and
+disables the Water now button. Recipes, seasonality and growth tracking
+all still work for any selected herb.
+
+## Adding a new herb
+
+In `js/plants.js`, add an entry to `PLANTS` with the same shape as
+`basil` or `parsley`. Set `live: false` unless you've wired the smart
+garden hardware to react to it. Add 3 recipes in `js/recipes.js` under
+the new id, and an `ILLUSTRATIONS` entry in `js/plants.js`. The herb
+picker, dropdowns, and seasonality table pick it up automatically.
+
+## Plant Health formula (unchanged)
 
 For each metric `m` with value `v` and ranges `{ideal, ok}`:
-
-- `null` → **excluded from the average** (weight is redistributed)
+- `null` → excluded from the average (weight redistributes)
 - inside `ideal` → 100
 - inside `ok` but outside `ideal` → linear 100 → 50 across the gap
 - outside `ok` → linear 50 → 0 across an equal-width buffer, clamped
 
 Reservoir sub-score = `clamp(level%, 0, 100)`.
 
-```
-PlantHealth = round( Σ wₘ · sₘ / Σ wₘ )  →  clamp 1..100
-```
-
-Basil weights: moisture **30%**, temperature **20%**, light **20%**,
-humidity **10%**, pH **10%**, reservoir **10%**.
-
-The Test Mode sub-scores card shows each metric's score and weight, so
-you can verify the formula behavior at any input combination.
-
-## Adding a new herb
-
-Open `js/plants.js` and add an entry to `PLANTS`:
-
-```js
-mint: {
-  id: 'mint', common_name: 'Mint', scientific_name: 'Mentha',
-  illustration: 'basil',          // or add a new SVG to ILLUSTRATIONS
-  notes: 'Cool-tolerant; loves moisture; partial sun is fine.',
-  ranges: {
-    moisture_pct:  { ideal: [50, 80], ok: [35, 90] },
-    temperature_c: { ideal: [15, 24], ok: [10, 30] },
-    // ...
-  },
-  weights: { /* must sum to 1.0 */ },
-  moisture_threshold_pct: 45,
-  watering_cooldown_s: 600,
-}
-```
+`PlantHealth = round(Σ wₘ · sₘ / Σ wₘ)`, clamped to 1–100.
