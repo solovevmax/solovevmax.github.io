@@ -18,23 +18,39 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo" aria-hidden="true">
-        <!-- Sprout and Spoon: a spoon bowl cradling a two-leaf sprout. -->
-        <svg viewBox="0 0 32 32" width="22" height="22" fill="none"
-             stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-             stroke-linejoin="round">
-          <!-- spoon bowl -->
-          <ellipse cx="16" cy="22" rx="9" ry="6"/>
-          <!-- spoon handle -->
-          <path d="M16 28 V 30" />
-          <!-- sprout stem -->
-          <path d="M16 18 V 10" />
-          <!-- left leaf -->
-          <path d="M16 14 C 12 14, 9 12, 9 8 C 13 8, 16 10, 16 14 Z" fill="currentColor" stroke="none"/>
-          <!-- right leaf -->
-          <path d="M16 11 C 20 11, 23 9, 23 5 C 19 5, 16 7, 16 11 Z" fill="currentColor" stroke="none"/>
+        <!-- Sprout & Spoon logo: lime spoon bowl + handle cradling a
+             three-leaf sprout. Matches the standalone brand asset. -->
+        <svg viewBox="0 0 200 260" xmlns="http://www.w3.org/2000/svg"
+             aria-hidden="true">
+          <g fill="currentColor">
+            <!-- Left leaf -->
+            <path d="M 100 132
+                     C 84 124, 60 112, 46 92
+                     C 56 86, 78 92, 92 106
+                     C 100 114, 102 124, 100 132 Z"/>
+            <!-- Right leaf -->
+            <path d="M 100 122
+                     C 116 114, 140 100, 154 78
+                     C 144 72, 122 78, 108 94
+                     C 100 104, 98 114, 100 122 Z"/>
+            <!-- Centre leaf with curved stem -->
+            <path d="M 100 132
+                     C 94 110, 90 80, 96 50
+                     C 100 32, 106 32, 110 50
+                     C 116 78, 112 108, 102 132
+                     L 100 132 Z"/>
+            <!-- Spoon bowl: open at top with a soft dip in the rim,
+                 curving down into a rounded base. -->
+            <path d="M 30 130
+                     Q 100 152 170 130
+                     C 170 168, 142 196, 100 196
+                     C 58 196, 30 168, 30 130 Z"/>
+            <!-- Spoon handle -->
+            <rect x="86" y="194" width="28" height="58" rx="6"/>
+          </g>
         </svg>
       </span>
-      <span class="brand-wordmark">Sprout and Spoon</span>
+      <span class="brand-wordmark">Sprout <span class="amp">&amp;</span> Spoon</span>
     </div>
 
     <div class="topbar-right">
@@ -417,7 +433,36 @@
         </div>
         <div class="field">
           <div>
-            <label for="set-planted-date">Planted date</label>
+            <label>How did you start this herb?</label>
+            <p class="hint" id="plant-source-hint">Drives growth-stage and harvest predictions in Recipes.</p>
+          </div>
+          <div class="plant-source-toggle" id="plant-source-toggle" role="radiogroup" aria-label="Plant source">
+            <button type="button" class="ps-opt" data-value="seeds" role="radio" aria-checked="false">
+              <span class="ps-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 22V11"/>
+                  <path d="M12 11c0-5 4-8 9-8-1 7-4 9-9 11z"/>
+                  <path d="M12 14c0-3-3-5-7-5 1 5 3 7 7 8z"/>
+                </svg>
+              </span>
+              From seed
+            </button>
+            <button type="button" class="ps-opt" data-value="mature" role="radio" aria-checked="false">
+              <span class="ps-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M6 6h15l-2 9H7z"/>
+                  <circle cx="9" cy="20" r="1.5"/>
+                  <circle cx="18" cy="20" r="1.5"/>
+                  <path d="M6 6L4 2H2"/>
+                </svg>
+              </span>
+              Shop-bought / mature
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <div>
+            <label for="set-planted-date" id="planted-date-label">Planted date</label>
             <p class="hint" id="planted-hint">Used by Recipes for growth tracking</p>
           </div>
           <input id="set-planted-date" type="date"/>
@@ -461,18 +506,6 @@
           <div class="slider-row" data-key="humidity_pct" data-unit="%">
             <div class="srlabel"><span>Humidity</span><span class="srval">—</span></div>
             <input type="range" min="0" max="100" step="1"/>
-          </div>
-
-          <div class="slider-row" data-key="ph" data-unit="">
-            <div class="srlabel">
-              <span>Soil pH</span>
-              <span class="srval">—</span>
-            </div>
-            <input type="range" min="0" max="14" step="0.1"/>
-            <label class="ph-toggle">
-              <input type="checkbox" id="ph-present" checked/>
-              <span>pH sensor present</span>
-            </label>
           </div>
 
           <div class="slider-row" data-key="light_lux" data-unit=" lx">

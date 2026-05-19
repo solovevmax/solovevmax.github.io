@@ -4,12 +4,13 @@
 (function (root) {
 
   const KEYS = {
-    settings: 'sproutandspoon.settings.v1',
-    events:   'sproutandspoon.events.v1',
-    waterTs:  'sproutandspoon.lastWaterTs.v1',
-    testMode: 'sproutandspoon.testMode.v1',
-    planted:  'sproutandspoon.plantedDates.v1',
-    shopping: 'sproutandspoon.shopping.v1',
+    settings:     'sproutandspoon.settings.v1',
+    events:       'sproutandspoon.events.v1',
+    waterTs:      'sproutandspoon.lastWaterTs.v1',
+    testMode:     'sproutandspoon.testMode.v1',
+    planted:      'sproutandspoon.plantedDates.v1',
+    plantSources: 'sproutandspoon.plantSources.v1',
+    shopping:     'sproutandspoon.shopping.v1',
   };
 
   const DEFAULT_AIO_FEEDS = {
@@ -120,6 +121,32 @@
     writeJSON(KEYS.shopping, all);
   }
 
+  // Plant source: 'seeds' (default) or 'mature' (bought as a grown plant).
+  // Drives Recipes growth-tracker logic — mature plants are immediately
+  // harvest-ready and use "days since acquired" instead of "days since planted".
+  const PLANT_SOURCE_VALUES = ['seeds', 'mature'];
+  function loadPlantSources() { return readJSON(KEYS.plantSources, {}); }
+  function loadPlantSource(plantId) {
+    const all = loadPlantSources();
+    const v = all[plantId];
+    return PLANT_SOURCE_VALUES.includes(v) ? v : 'seeds';
+  }
+  function savePlantSource(plantId, value) {
+    if (!PLANT_SOURCE_VALUES.includes(value)) return;
+    const all = loadPlantSources();
+    all[plantId] = value;
+    writeJSON(KEYS.plantSources, all);
+  }
+  function ensurePlantSource(plantId) {
+    const cur = loadPlantSource(plantId);
+    const all = loadPlantSources();
+    if (!all[plantId]) {
+      all[plantId] = cur;
+      writeJSON(KEYS.plantSources, all);
+    }
+    return cur;
+  }
+
   root.HerbStorage = {
     DEFAULTS, DEFAULT_AIO_FEEDS,
     loadSettings, saveSettings,
@@ -127,6 +154,7 @@
     loadTestMode, saveTestMode,
     loadLastWaterTs, saveLastWaterTs,
     loadPlantedDates, loadPlantedDate, savePlantedDate, ensurePlantedDate,
+    loadPlantSources, loadPlantSource, savePlantSource, ensurePlantSource,
     loadShoppingState, saveShoppingState,
   };
 })(window);

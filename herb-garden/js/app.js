@@ -24,8 +24,6 @@
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 0-4 0v9.5a4 4 0 1 0 4 0z"/></svg>' },
     { key: 'humidity_pct',    name: 'Humidity',      unit: '%',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a4 4 0 0 0 4 4 5 5 0 0 0 5-3 5 5 0 0 0 5 3 4 4 0 0 0 4-4c0-3-4-6-9-12-5 6-9 9-9 12z"/></svg>' },
-    { key: 'ph',              name: 'pH',            unit: '',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg>' },
     { key: 'light_lux',       name: 'Light',         unit: ' lx',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2"/></svg>' },
     { key: 'reservoir_level', name: 'Reservoir',     unit: '%',
@@ -176,7 +174,6 @@
   function fmtVal(key, v) {
     if (v == null) return null;
     if (key === 'light_lux') return Math.round(v).toLocaleString();
-    if (key === 'ph') return v.toFixed(2);
     return Number(v).toFixed(1);
   }
 
@@ -229,8 +226,8 @@
       $('#light-sub').textContent = descr;
     }
 
-    // Key metrics (4 small chips, secondary)
-    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'ph'];
+    // Key metrics (small chips, secondary)
+    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'light_lux'];
     const r = state.reading || {};
     $('#key-metrics').innerHTML = keys.map(k => {
       const def = METRICS.find(m => m.key === k);
@@ -265,7 +262,7 @@
     if (worstVal >= 80) return 'All readings inside ideal ranges';
     const label = ({
       moisture_pct: 'moisture', temperature_c: 'temperature',
-      humidity_pct: 'humidity', ph: 'pH', light_lux: 'light',
+      humidity_pct: 'humidity', light_lux: 'light',
       reservoir: 'reservoir',
     })[worstKey] || worstKey;
     return `Bringing the score down: ${label}`;
@@ -391,7 +388,7 @@
     ];
     const labels = {
       moisture_pct: ['Soil moisture', '%'], temperature_c: ['Temperature', '°C'],
-      humidity_pct: ['Humidity', '%'], ph: ['pH', ''],
+      humidity_pct: ['Humidity', '%'],
       light_lux: ['Light (BH1750)', ' lx'],
     };
     for (const [k, r] of Object.entries(plant.ranges)) {
@@ -454,6 +451,7 @@
     settings = S.saveSettings({ selected_plant: plantId });
     plant = getPlant(plantId);
     S.ensurePlantedDate(plantId);
+    S.ensurePlantSource(plantId);
     // Tell Adafruit IO (best-effort) which herb is now selected.
     if (source instanceof AdafruitIOSource && source.publishSelectedHerb) {
       source.publishSelectedHerb(plantId);
@@ -572,8 +570,22 @@
     }
     const planted = S.ensurePlantedDate(settings.selected_plant);
     $('#set-planted-date').value = planted;
+
+    // Plant source toggle (From seed / Shop-bought · mature)
+    const plantSource = S.ensurePlantSource(settings.selected_plant);
+    document.querySelectorAll('#plant-source-toggle .ps-opt').forEach(opt => {
+      const active = opt.dataset.value === plantSource;
+      opt.classList.toggle('active', active);
+      opt.setAttribute('aria-checked', active ? 'true' : 'false');
+    });
+
     const liveStr = plant.live ? 'Live wired to garden' : 'Demo / reference profile';
     $('#planted-hint').textContent = `Used by Recipes for growth tracking · ${liveStr}`;
+    $('#planted-date-label').textContent =
+      plantSource === 'mature' ? 'Date acquired' : 'Planted date';
+    $('#plant-source-hint').textContent = plantSource === 'mature'
+      ? 'Treated as mature — harvest-ready from day one.'
+      : 'Counted from sowing — uses the herb\'s grow-time thresholds.';
   }
 
   // Master render
@@ -717,17 +729,30 @@
     renderRecipes();
   });
 
+  // Plant source segmented toggle (From seed / Shop-bought · mature)
+  document.querySelectorAll('#plant-source-toggle .ps-opt').forEach(opt => {
+    opt.addEventListener('click', () => {
+      const value = opt.dataset.value;
+      S.savePlantSource(plant.id, value);
+      renderSettings();
+      renderRecipes();
+    });
+  });
+
   // ------------------------------------------------------------------------
   // TEST MODE — fully isolated manual sandbox. Does NOT touch the live data
   // source, events log, or last-watered timestamp.
   // ------------------------------------------------------------------------
   const TEST_DEFAULTS = {
     moisture_pct: 58, temperature_c: 22.4, humidity_pct: 52,
-    ph: 6.6, light_lux: 22000, reservoir_level: 85,
+    light_lux: 22000, reservoir_level: 85,
     last_watered_min_ago: 90,
-    ph_present: true,
   };
+  // Strip any legacy pH fields a previous build may have written into
+  // localStorage so the test state matches the current schema.
   let testState = S.loadTestMode() || { ...TEST_DEFAULTS };
+  delete testState.ph;
+  delete testState.ph_present;
 
   function buildTestReading() {
     return {
@@ -735,7 +760,6 @@
       moisture_pct:    Number(testState.moisture_pct),
       temperature_c:   Number(testState.temperature_c),
       humidity_pct:    Number(testState.humidity_pct),
-      ph:              testState.ph_present ? Number(testState.ph) : null,
       light_lux:       Number(testState.light_lux),
       reservoir_level: Number(testState.reservoir_level),
       pump_event: null,
@@ -768,7 +792,6 @@
     testState = {
       ...sc.reading,
       last_watered_min_ago: sc.last_watered_minutes_ago,
-      ph_present: sc.ph_present !== false,
     };
     S.saveTestMode(testState);
     renderTestInputs();
@@ -783,19 +806,12 @@
       const input = row.querySelector('input[type="range"]');
       const key = row.dataset.key;
       input.addEventListener('input', () => {
-        testState[key] = key === 'ph' ? parseFloat(input.value) : parseFloat(input.value);
+        testState[key] = parseFloat(input.value);
         S.saveTestMode(testState);
-        // Clear active preset highlight on manual edit
         $('#presets').querySelectorAll('.preset.active').forEach(b => b.classList.remove('active'));
         renderTestInputs();
         renderTestPreview();
       });
-    });
-    $('#ph-present').addEventListener('change', (e) => {
-      testState.ph_present = e.target.checked;
-      S.saveTestMode(testState);
-      renderTestInputs();
-      renderTestPreview();
     });
     $('#reset-test').addEventListener('click', () => applyPreset('healthy'));
   }
@@ -808,15 +824,7 @@
       const unit = row.dataset.unit || '';
       const v = testState[key];
       input.value = v;
-      const isPhRow = key === 'ph';
-      const phOff = isPhRow && !testState.ph_present;
-      row.classList.toggle('disabled', phOff);
-      input.disabled = phOff;
-      if (phOff) {
-        valEl.textContent = 'No sensor';
-      } else if (key === 'ph') {
-        valEl.textContent = Number(v).toFixed(1);
-      } else if (key === 'light_lux') {
+      if (key === 'light_lux') {
         valEl.textContent = Math.round(v).toLocaleString() + unit;
       } else if (key === 'last_watered_min_ago') {
         valEl.textContent = fmtMinAgo(Number(v));
@@ -824,7 +832,6 @@
         valEl.textContent = Math.round(v) + unit;
       }
     });
-    $('#ph-present').checked = !!testState.ph_present;
   }
 
   function renderTestPreview() {
@@ -866,7 +873,7 @@
     $('#test-light-sub').textContent = descr;
 
     // Key metrics chips
-    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'ph'];
+    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'light_lux'];
     $('#test-key-metrics').innerHTML = keys.map(k => {
       const def = METRICS.find(m => m.key === k);
       const v = reading[k];
@@ -883,7 +890,7 @@
     // Sub-scores breakdown
     const SUB_LABELS = {
       moisture_pct: 'Soil moisture', temperature_c: 'Temperature',
-      humidity_pct: 'Humidity', ph: 'pH',
+      humidity_pct: 'Humidity',
       light_lux: 'Light (BH1750)', reservoir: 'Reservoir',
     };
     const subRows = Object.entries(health.subscores).map(([k, v]) => {
@@ -892,19 +899,11 @@
       if (v < 40) cls = 'bad';
       else if (v < 70) cls = 'warn';
       return `<div class="subscore-row ${cls}">
-        <div class="lbl">${SUB_LABELS[k]}<br><span style="color:var(--muted);font-size:11px">${w}</span></div>
+        <div class="lbl">${SUB_LABELS[k] || k}<br><span style="color:var(--muted);font-size:11px">${w}</span></div>
         <div class="bar"><span style="width:${v}%"></span></div>
         <div class="num">${Math.round(v)}</div>
       </div>`;
     });
-    // Show missing pH explicitly
-    if (!testState.ph_present) {
-      subRows.push(`<div class="subscore-row missing">
-        <div class="lbl">pH<br><span style="color:var(--muted);font-size:11px">excluded (no sensor)</span></div>
-        <div class="bar"><span style="width:0"></span></div>
-        <div class="num">—</div>
-      </div>`);
-    }
     $('#test-subscores').innerHTML = subRows.join('');
 
     // Alerts that would trigger
@@ -959,25 +958,35 @@
 
   function renderRecipes() {
     const plantedIso = S.ensurePlantedDate(plant.id);
+    const plantSource = S.ensurePlantSource(plant.id);
     $('#growth-art').innerHTML = ILLUSTRATIONS[plant.illustration];
-    $('#growth-herb').textContent = `Growing: ${plant.common_name}${plant.live ? '' : ' · demo profile'}`;
-    const g = growthStage(plantedIso, plant);
+    const sourceTag = plantSource === 'mature' ? ' · shop-bought' : ' · from seed';
+    const demoTag = plant.live ? '' : ' · demo profile';
+    $('#growth-herb').textContent = `Growing: ${plant.common_name}${sourceTag}${demoTag}`;
+    const g = growthStage(plantedIso, plant, plantSource);
     $('#growth-headline').textContent = `Day ${g.days}`;
     $('#growth-stage').textContent = g.stage;
     $('#growth-rec').textContent = g.recommendation;
-    // Progress bar: 0..harvest threshold
-    const thresholds = plant.grow_time_days;
-    const harvestDay = thresholds.harvest;
-    const pct = Math.max(0, Math.min(100, (g.days / harvestDay) * 100));
-    $('#growth-bar-fill').style.width = pct + '%';
-    $('#growth-marks').innerHTML = [
-      ['Seedling',     g.days >= 0],
-      ['Vegetative',   g.days >= thresholds.seedling],
-      ['Maturing',     g.days >= thresholds.vegetative],
-      ['Harvest',      g.days >= thresholds.mature],
-    ].map(([lbl, reached]) =>
-      `<span class="${reached ? 'reached' : ''}">${lbl}</span>`
-    ).join('');
+    // Progress bar: 0..harvest threshold for seeds, 100% for mature.
+    $('#growth-bar-fill').style.width = g.progressPct + '%';
+    if (plantSource === 'mature') {
+      $('#growth-marks').innerHTML = [
+        ['Settling in', g.days < 7],
+        ['Established', g.days >= 7],
+      ].map(([lbl, current]) =>
+        `<span class="${current ? 'reached' : ''}">${lbl}</span>`
+      ).join('');
+    } else {
+      const thresholds = plant.grow_time_days;
+      $('#growth-marks').innerHTML = [
+        ['Seedling',     g.days >= 0],
+        ['Vegetative',   g.days >= thresholds.seedling],
+        ['Maturing',     g.days >= thresholds.vegetative],
+        ['Harvest',      g.days >= thresholds.mature],
+      ].map(([lbl, reached]) =>
+        `<span class="${reached ? 'reached' : ''}">${lbl}</span>`
+      ).join('');
+    }
 
     // Recipe of the day
     const r = recipeOfTheDay(plant.id);

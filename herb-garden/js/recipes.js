@@ -264,14 +264,46 @@
     return list[idx];
   }
 
-  // Growth stages + harvest readiness from planted date.
-  // Uses the plant's `grow_time_days` thresholds.
-  function growthStage(plantedIso, plant) {
+  // Growth stages + harvest readiness from planted date + plant source.
+  //
+  // plantSource:
+  //   'seeds'  - default; uses plant.grow_time_days thresholds.
+  //   'mature' - shop-bought / fully grown; harvest-ready from day 1.
+  //              The "Day X" counter now measures days since acquisition.
+  function growthStage(plantedIso, plant, plantSource) {
     if (!plantedIso) {
-      return { days: 0, stage: 'Not planted', recommendation: 'Set a planted date in Settings to start tracking.', harvestReady: false };
+      return {
+        days: 0,
+        stage: 'Not planted',
+        recommendation: 'Set a planted date in Settings to start tracking.',
+        harvestReady: false,
+        source: plantSource || 'seeds',
+        progressPct: 0,
+        dayLabel: 'Day',
+      };
     }
     const plantedDate = new Date(plantedIso);
     const days = Math.max(0, Math.floor((Date.now() - plantedDate.getTime()) / 86_400_000));
+    const source = plantSource === 'mature' ? 'mature' : 'seeds';
+
+    if (source === 'mature') {
+      const window = plant.harvest_window_days || [0, 120];
+      const settled = days >= 7;
+      const stage = settled ? 'Established' : 'Settling in';
+      const recommendation = settled
+        ? 'Ready to harvest. Pick a few outer / top leaves at a time to keep it productive.'
+        : 'Let it settle into its new spot — light watering, no major harvest yet.';
+      return {
+        days,
+        stage,
+        recommendation,
+        harvestReady: true,
+        source,
+        progressPct: 100,
+        dayLabel: 'Day',
+      };
+    }
+
     const g = plant.grow_time_days;
     let stage, recommendation, harvestReady = false;
     if (days < g.seedling) {
@@ -288,7 +320,8 @@
       harvestReady = true;
       recommendation = 'Ready to harvest. Regular picking will keep the plant productive.';
     }
-    return { days, stage, recommendation, harvestReady };
+    const progressPct = Math.max(0, Math.min(100, (days / g.harvest) * 100));
+    return { days, stage, recommendation, harvestReady, source, progressPct, dayLabel: 'Day' };
   }
 
   root.SproutRecipes = { RECIPES, recipeOfTheDay, growthStage };

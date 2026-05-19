@@ -58,7 +58,8 @@ Both devices on the same Wi-Fi network:
 | **Recipe data**     | `js/recipes.js` — `RECIPES` keyed by herb id (3 recipes each, edit / add freely) |
 | **Shopping list**   | Derived from a recipe's `ingredients` array; check-state persists in localStorage key `sproutandspoon.shopping.v1` |
 | **Seasonality**     | `js/seasonality.js` — `TABLE` (per-herb / per-season tier + tip) and `GROW_HINT` |
-| **Planted dates**   | Settings → Garden ("Planted date" input). Persists per herb in `sproutandspoon.plantedDates.v1` |
+| **Planted dates**   | Settings → Garden ("Planted date" / "Date acquired" input). Persists per herb in `sproutandspoon.plantedDates.v1` |
+| **Plant source**    | Settings → Garden ("From seed" / "Shop-bought · mature" toggle). Persists per herb in `sproutandspoon.plantSources.v1`. Drives growth-stage logic in Recipes |
 | **Plant Health**    | `js/health.js` — the scoring formula (unchanged from prior milestones) |
 
 ## Adafruit IO setup
@@ -84,9 +85,12 @@ line at 115200 baud:
 
 ```json
 {"timestamp":"2026-05-17T12:34:56Z","moisture":42.3,"temperature":22.1,
- "humidity":55,"ph":6.5,"light_lux":12000,"reservoir_level":80,
+ "humidity":55,"light_lux":12000,"reservoir_level":80,
  "pump_event":null}
 ```
+
+Unknown fields are silently ignored, so existing firmware that still
+emits a `ph` value will continue to work — the field just isn't used.
 
 App → Arduino command:
 ```json
@@ -140,7 +144,7 @@ garden hardware to react to it. Add 3 recipes in `js/recipes.js` under
 the new id, and an `ILLUSTRATIONS` entry in `js/plants.js`. The herb
 picker, dropdowns, and seasonality table pick it up automatically.
 
-## Plant Health formula (unchanged)
+## Plant Health formula
 
 For each metric `m` with value `v` and ranges `{ideal, ok}`:
 - `null` → excluded from the average (weight redistributes)
@@ -149,5 +153,9 @@ For each metric `m` with value `v` and ranges `{ideal, ok}`:
 - outside `ok` → linear 50 → 0 across an equal-width buffer, clamped
 
 Reservoir sub-score = `clamp(level%, 0, 100)`.
+
+Metrics scored: soil moisture (30%), temperature (25%), light (20%),
+humidity (15%), reservoir (10%). pH is intentionally not scored —
+the prototype hardware doesn't include a pH sensor.
 
 `PlantHealth = round(Σ wₘ · sₘ / Σ wₘ)`, clamped to 1–100.

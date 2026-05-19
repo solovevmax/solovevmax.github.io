@@ -9,7 +9,7 @@
  *   sourceLabel         - human string
  *
  * Reading shape (after normalization):
- *   { timestamp, moisture_pct, temperature_c, humidity_pct, ph,
+ *   { timestamp, moisture_pct, temperature_c, humidity_pct,
  *     light_lux, reservoir_level, pump_event }
  */
 (function (root) {
@@ -18,7 +18,6 @@
     moisture_pct:    [0, 100],
     temperature_c:   [-20, 60],
     humidity_pct:    [0, 100],
-    ph:              [0, 14],
     light_lux:       [0, 200000],
     reservoir_level: [0, 100],
   };
@@ -38,7 +37,6 @@
       moisture_pct:    clean('moisture_pct',    raw.moisture_pct    ?? raw.moisture),
       temperature_c:   clean('temperature_c',   raw.temperature_c   ?? raw.temperature),
       humidity_pct:    clean('humidity_pct',    raw.humidity_pct    ?? raw.humidity),
-      ph:              clean('ph',              raw.ph),
       light_lux:       clean('light_lux',       raw.light_lux),
       reservoir_level: clean('reservoir_level', raw.reservoir_level),
       pump_event:      raw.pump_event ?? null,
@@ -75,14 +73,12 @@
         }
         const temp  = 22 + 2.5 * Math.sin(this._t / 30) + (Math.random() - 0.5) * 0.6;
         const hum   = 50 + 7   * Math.sin(this._t / 40) + (Math.random() - 0.5) * 2;
-        const ph    = 6.5 + 0.15 * Math.sin(this._t / 60);
         const lux   = Math.max(0, 24000 + 18000 * Math.sin(this._t / 90) + (Math.random() - 0.5) * 1500);
         this._reading = {
           timestamp: new Date().toISOString(),
           moisture_pct: Math.round(this._moisture * 10) / 10,
           temperature_c: Math.round(temp * 10) / 10,
           humidity_pct: Math.round(hum * 10) / 10,
-          ph: Math.round(ph * 100) / 100,
           light_lux: Math.round(lux),
           reservoir_level: Math.round(this._reservoir * 10) / 10,
           pump_event: pumpEvent,
@@ -249,7 +245,6 @@
           humidity_pct:    h ? h.value : null,
           light_lux:       l ? l.value : null,
           reservoir_level: r ? r.value : null,
-          ph:              null,   // optional in this prototype
           pump_event:      p && /complete|done|ok/i.test(String(p.value)) ? 'completed' : null,
         };
         this._reading = normalize(raw);

@@ -122,6 +122,11 @@ button { font: inherit; cursor: pointer; }
 .brand .brand-wordmark {
   letter-spacing: -0.01em;
 }
+.brand .brand-wordmark .amp {
+  color: var(--lime-deep);
+  font-weight: 500;
+  margin: 0 1px;
+}
 
 .topbar-right { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
 
@@ -749,14 +754,6 @@ button { font: inherit; cursor: pointer; }
 }
 .slider-row.disabled .srval { color: var(--muted); font-style: italic; }
 
-.ph-toggle {
-  display: inline-flex; align-items: center; gap: 8px;
-  margin-top: 10px;
-  font-size: 13px; color: var(--muted);
-  cursor: pointer;
-}
-.ph-toggle input { accent-color: var(--sage); width: 16px; height: 16px; }
-
 /* Sub-scores breakdown */
 .subscore-list { display: grid; gap: 8px; }
 .subscore-row {
@@ -1084,3 +1081,38 @@ button { font: inherit; cursor: pointer; }
 #serial-status-row[hidden] { display: none; }
 .aio-status-ok    { color: var(--lime-deep); }
 .aio-status-error { color: var(--bad); }
+
+/* Plant source toggle (segmented control in Settings → Garden) */
+.plant-source-toggle {
+  display: inline-flex;
+  background: var(--bg-tint);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 4px;
+  gap: 2px;
+}
+.plant-source-toggle .ps-opt {
+  appearance: none; border: 0; background: transparent;
+  font: inherit; font-size: 13px; font-weight: 500;
+  color: var(--ink-2);
+  padding: 7px 14px;
+  border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease;
+  white-space: nowrap;
+}
+.plant-source-toggle .ps-opt:hover { color: var(--ink); }
+.plant-source-toggle .ps-opt .ps-icon { display: inline-grid; place-items: center; }
+.plant-source-toggle .ps-opt .ps-icon svg { width: 14px; height: 14px; }
+.plant-source-toggle .ps-opt.active {
+  background: var(--lime);
+  color: var(--ink);
+}
+@media (max-width: 480px) {
+  /* On phones, let the toggle wrap below the label instead of stacking
+     across two awkward columns. */
+  .form .field { flex-wrap: wrap; }
+  .plant-source-toggle { width: 100%; justify-content: center; }
+  .plant-source-toggle .ps-opt { flex: 1; justify-content: center; }
+}

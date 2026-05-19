@@ -196,12 +196,12 @@
   };
 
   // Standard weights template — moisture + temperature lead for most herbs.
+  // (No pH — the prototype is not wired with a pH sensor.)
   const STANDARD_WEIGHTS = {
     moisture_pct:  0.30,
-    temperature_c: 0.20,
+    temperature_c: 0.25,
     light_lux:     0.20,
-    humidity_pct:  0.10,
-    ph:            0.10,
+    humidity_pct:  0.15,
     reservoir:     0.10,
   };
 
@@ -227,7 +227,6 @@
         moisture_pct:  { ideal: [40, 70],   ok: [25, 85] },
         temperature_c: { ideal: [18, 27],   ok: [13, 32] },
         humidity_pct:  { ideal: [40, 60],   ok: [30, 80] },
-        ph:            { ideal: [6.0, 7.0], ok: [5.5, 7.5] },
         light_lux:     { ideal: [10000, 50000], ok: [3000, 100000] },
       },
       weights: { ...STANDARD_WEIGHTS },
@@ -258,7 +257,6 @@
         moisture_pct:  { ideal: [45, 75],   ok: [30, 90] },
         temperature_c: { ideal: [13, 22],   ok: [5, 28] },
         humidity_pct:  { ideal: [45, 65],   ok: [30, 85] },
-        ph:            { ideal: [6.0, 7.0], ok: [5.5, 7.5] },
         light_lux:     { ideal: [8000, 35000], ok: [2000, 80000] },
       },
       weights: { ...STANDARD_WEIGHTS },
@@ -289,7 +287,6 @@
         moisture_pct:  { ideal: [25, 50],   ok: [15, 70] },
         temperature_c: { ideal: [16, 26],   ok: [8, 32] },
         humidity_pct:  { ideal: [30, 55],   ok: [20, 75] },
-        ph:            { ideal: [6.0, 8.0], ok: [5.5, 8.5] },
         light_lux:     { ideal: [15000, 60000], ok: [5000, 120000] },
       },
       weights: { ...STANDARD_WEIGHTS },
@@ -320,7 +317,6 @@
         moisture_pct:  { ideal: [50, 80],   ok: [35, 90] },
         temperature_c: { ideal: [15, 24],   ok: [8, 30] },
         humidity_pct:  { ideal: [50, 70],   ok: [35, 90] },
-        ph:            { ideal: [6.0, 7.0], ok: [5.5, 7.5] },
         light_lux:     { ideal: [5000, 30000], ok: [1500, 70000] },
       },
       weights: { ...STANDARD_WEIGHTS },
@@ -333,88 +329,71 @@
   };
 
   // Test Mode presets. Each just populates the manual input fields; you can
-  // edit any value afterward. ph_present=false means "no pH sensor attached".
+  // edit any value afterward.
   const SCENARIOS = {
     healthy: {
       label: 'Healthy basil',
       reading: {
         moisture_pct: 58, temperature_c: 22.4, humidity_pct: 52,
-        ph: 6.6, light_lux: 22000, reservoir_level: 85,
+        light_lux: 22000, reservoir_level: 85,
       },
       last_watered_minutes_ago: 90,
-      ph_present: true,
     },
     dry: {
       label: 'Dry soil',
       reading: {
         moisture_pct: 22, temperature_c: 26.1, humidity_pct: 38,
-        ph: 6.5, light_lux: 18000, reservoir_level: 60,
+        light_lux: 18000, reservoir_level: 60,
       },
       last_watered_minutes_ago: 720,
-      ph_present: true,
     },
     overly_wet: {
       label: 'Overly wet soil',
       reading: {
         moisture_pct: 92, temperature_c: 22.0, humidity_pct: 75,
-        ph: 6.6, light_lux: 20000, reservoir_level: 80,
+        light_lux: 20000, reservoir_level: 80,
       },
       last_watered_minutes_ago: 20,
-      ph_present: true,
     },
     low_reservoir: {
       label: 'Low reservoir',
       reading: {
         moisture_pct: 44, temperature_c: 23.0, humidity_pct: 49,
-        ph: 6.4, light_lux: 24000, reservoir_level: 12,
+        light_lux: 24000, reservoir_level: 12,
       },
       last_watered_minutes_ago: 45,
-      ph_present: true,
     },
     poor_light: {
       label: 'Poor light',
       reading: {
         moisture_pct: 50, temperature_c: 22.0, humidity_pct: 52,
-        ph: 6.6, light_lux: 1500, reservoir_level: 80,
+        light_lux: 1500, reservoir_level: 80,
       },
       last_watered_minutes_ago: 120,
-      ph_present: true,
     },
     low_temp: {
       label: 'Low temperature',
       reading: {
         moisture_pct: 50, temperature_c: 10.5, humidity_pct: 50,
-        ph: 6.6, light_lux: 20000, reservoir_level: 80,
+        light_lux: 20000, reservoir_level: 80,
       },
       last_watered_minutes_ago: 90,
-      ph_present: true,
     },
     high_temp: {
       label: 'High temperature',
       reading: {
         moisture_pct: 38, temperature_c: 34.5, humidity_pct: 32,
-        ph: 6.5, light_lux: 60000, reservoir_level: 70,
+        light_lux: 60000, reservoir_level: 70,
       },
       last_watered_minutes_ago: 180,
-      ph_present: true,
     },
-    low_ph: {
-      label: 'Low soil pH',
+    low_humidity: {
+      label: 'Low humidity',
       reading: {
-        moisture_pct: 55, temperature_c: 22.0, humidity_pct: 50,
-        ph: 4.8, light_lux: 22000, reservoir_level: 80,
+        moisture_pct: 48, temperature_c: 24.0, humidity_pct: 18,
+        light_lux: 22000, reservoir_level: 70,
       },
-      last_watered_minutes_ago: 90,
-      ph_present: true,
-    },
-    high_ph: {
-      label: 'High soil pH',
-      reading: {
-        moisture_pct: 55, temperature_c: 22.0, humidity_pct: 50,
-        ph: 8.4, light_lux: 22000, reservoir_level: 80,
-      },
-      last_watered_minutes_ago: 90,
-      ph_present: true,
+      last_watered_minutes_ago: 180,
     },
   };
 
