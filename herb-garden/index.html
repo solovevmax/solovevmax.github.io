@@ -162,13 +162,17 @@
             <p class="gauge-explanation" id="gauge-exp">Calculating…</p>
             <p class="gauge-sub" id="gauge-sub">Combining moisture, temperature, light & more</p>
             <div class="gauge-actions">
-              <button class="btn" id="water-btn">
+              <button class="btn" id="water-btn" type="button">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/>
                 </svg>
                 Water now
               </button>
             </div>
+            <p class="water-feedback" id="water-feedback" role="status" aria-live="polite"></p>
+            <p class="pump-status-line" id="pump-status-line">
+              Pump: <span id="pump-status-value">—</span><span id="pump-status-explain"></span>
+            </p>
           </div>
 
           <div class="strip">

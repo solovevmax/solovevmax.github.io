@@ -352,6 +352,35 @@ button { font: inherit; cursor: pointer; }
 
 .gauge-actions { margin-top: 18px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 
+/* Water-now feedback line — sits under the button, aria-live for SR. */
+.water-feedback {
+  margin: 10px auto 0;
+  min-height: 1.2em;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  transition: color 200ms ease;
+}
+.water-feedback.info  { color: var(--ink-2); }
+.water-feedback.ok    { color: var(--lime-deep); }
+.water-feedback.error { color: var(--bad); }
+
+/* Pump status line — small footnote under the water feedback. */
+.pump-status-line {
+  margin: 8px auto 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pump-status-line[hidden] { display: none; }
+.pump-status-line .ps-idle      { color: var(--muted); font-weight: 600; }
+.pump-status-line .ps-running   { color: var(--lime-deep); font-weight: 600; }
+.pump-status-line .ps-completed { color: var(--lime-deep); font-weight: 600; }
+.pump-status-line .ps-blocked   { color: var(--warn); font-weight: 600; }
+.pump-status-line .ps-error     { color: var(--bad);  font-weight: 600; }
+.pump-status-line .ps-           { color: var(--muted); }
+
 /* ============================================================
    Status strip (last watered / reservoir / light)
    ============================================================ */
@@ -527,6 +556,33 @@ button { font: inherit; cursor: pointer; }
 .metric-card.bad  .range-strip > .indicator { background: var(--bad); }
 .metric-card .target { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .metric-card .ts { color: var(--muted); font-size: 11px; margin-top: 6px; }
+
+/* Live data: per-card explanation copy. Sits below the timestamp,
+   separated by a hairline so the helper text reads as auxiliary. */
+.metric-description {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* dim / medium / bright tag on the Light card top row. */
+.metric-tag {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  background: var(--bg-tint);
+  color: var(--muted);
+  text-transform: lowercase;
+}
+.metric-tag.ml-dim    { background: var(--bg-tint);  color: var(--muted); }
+.metric-tag.ml-medium { background: var(--warn-soft); color: #8A6919; }
+.metric-tag.ml-bright { background: var(--lime);     color: var(--ink); }
 .metric-card.missing .value { color: var(--muted); font-style: italic; font-size: 18px; }
 
 /* History / Alerts list */

@@ -215,19 +215,27 @@
 
     async sendCommand(cmd) {
       if (!cmd || cmd.cmd !== 'water') return;
+      // Throw on failure so the UI can show a clear error. The caller is
+      // responsible for catching; a fire-and-forget caller can attach
+      // .catch(...). Single POST per call — no retries here.
+      let r;
       try {
-        const r = await fetch(this._url('/api/water'), {
+        r = await fetch(this._url('/api/water'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ duration_ms: cmd.duration_ms || 3000 }),
         });
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          this._lastError = body.error || `Water POST HTTP ${r.status}`;
-        }
       } catch (e) {
         this._lastError = e.message || String(e);
+        throw new Error(this._lastError);
       }
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        const msg = body.error || `Water POST HTTP ${r.status}`;
+        this._lastError = msg;
+        throw new Error(msg);
+      }
+      this._lastError = null;
     }
 
     async publishSelectedHerb(herb) {

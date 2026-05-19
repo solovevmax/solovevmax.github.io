@@ -18,18 +18,49 @@
   const $ = (sel) => document.querySelector(sel);
 
   // --- Static metric metadata used in rendering ----------------------------
+  // `description` is shown as helper copy on each metric card in the Live
+  // data tab so the user understands what the number really represents.
   const METRICS = [
     { key: 'moisture_pct',    name: 'Soil moisture', unit: '%',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>' },
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>',
+      description: 'Calibrated percentage derived from the raw analog sensor reading, mapped between the configured dry-air and fully-wet calibration points. Higher % = wetter soil; lower % = drier soil. This is a relative value tuned to this setup — not an absolute laboratory soil-water-content measurement.' },
     { key: 'temperature_c',   name: 'Temperature',   unit: '°C',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 0-4 0v9.5a4 4 0 1 0 4 0z"/></svg>' },
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 0-4 0v9.5a4 4 0 1 0 4 0z"/></svg>',
+      description: 'Live air temperature in degrees Celsius, measured by the DHT sensor next to the plant. Higher numbers mean warmer ambient conditions around the plant.' },
     { key: 'humidity_pct',    name: 'Humidity',      unit: '%',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a4 4 0 0 0 4 4 5 5 0 0 0 5-3 5 5 0 0 0 5 3 4 4 0 0 0 4-4c0-3-4-6-9-12-5 6-9 9-9 12z"/></svg>' },
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a4 4 0 0 0 4 4 5 5 0 0 0 5-3 5 5 0 0 0 5 3 4 4 0 0 0 4-4c0-3-4-6-9-12-5 6-9 9-9 12z"/></svg>',
+      description: 'Relative humidity (%) from the DHT sensor. Relative humidity describes how much water vapour is in the air compared to how much the air could hold at this temperature. Higher % = moister air; lower % = drier air.' },
     { key: 'light_lux',       name: 'Light',         unit: ' lx',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2"/></svg>' },
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2"/></svg>',
+      description: 'The BH1750 reports illuminance directly in lux — the value above is the sensor reading, not a rescaled estimate. The dim / medium / bright label on Home is just an interpretation layer (dim < 100 lx, medium 100–499 lx, bright ≥ 500 lx).' },
     { key: 'reservoir_level', name: 'Reservoir',     unit: '%',
-      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v6a7 7 0 0 1-14 0z"/><path d="M5 14h14"/></svg>' },
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v6a7 7 0 0 1-14 0z"/><path d="M5 14h14"/></svg>',
+      description: 'Estimated water-tank fill level, 0–100%. The firmware now corrects the previously-inverted mapping, so 0% is empty and 100% is full.' },
   ];
+
+  // Map a lux reading to the user-facing interpretation label.
+  // dim < 100, medium 100–499, bright ≥ 500. The BH1750 reports lux
+  // directly; this is a labelling layer, not a recalibration.
+  function interpretLux(lux) {
+    if (lux == null || !Number.isFinite(lux)) return null;
+    if (lux < 100)  return 'dim';
+    if (lux < 500)  return 'medium';
+    return 'bright';
+  }
+
+  // Human-readable explanation of the firmware-side pump status string.
+  // Mirrors the state machine in the CircuitPython firmware so the UI
+  // stays in sync without firmware changes.
+  function pumpStatusExplain(status) {
+    switch ((status || '').toLowerCase()) {
+      case 'idle':      return 'pump is currently off';
+      case 'running':   return 'pump is on right now';
+      case 'completed': return 'last watering finished';
+      case 'blocked':   return 'firmware safety blocked this — usually low reservoir or cooldown is still active';
+      case 'error':     return 'pump hardware reported an error';
+      default:          return 'no status reported yet';
+    }
+  }
 
   // --- Live mode controller state ------------------------------------------
   let settings = S.loadSettings();
@@ -92,7 +123,12 @@
           && r.moisture_pct < settings.moisture_threshold_pct
           && cooldownOk
           && haveWater) {
-        triggerWatering(now, 'auto');
+        // Fire-and-forget; the in-flight lock inside triggerWatering
+        // prevents overlap with manual presses. Errors are surfaced via
+        // the event log so we don't crash the tick loop.
+        triggerWatering(now, 'auto').catch(e => {
+          S.addEvent('alert', `Auto-water failed: ${e.message || e}`);
+        });
       }
 
       // Pump event echo (from real Arduino)
@@ -119,19 +155,31 @@
     render();
   }
 
-  function triggerWatering(now, kind) {
+  // Single-flight lock on water commands. Prevents a second POST from
+  // being issued before the first one has settled — covers double-clicks
+  // on the Water now button, parallel auto-water ticks, and stray
+  // re-bound event listeners. The firmware also deduplicates on its end,
+  // so the lock is defence in depth.
+  let _waterInFlight = false;
+
+  async function triggerWatering(now, kind) {
     if (!plant.live) {
-      // Suppress the device command for reference-only herbs. Still surface
-      // an info message so the user knows why nothing happened.
       S.addEvent('info', `Watering disabled for ${plant.common_name}. Switch to Basil to trigger the pump.`);
-      return;
+      return { skipped: 'not-live' };
     }
+    if (_waterInFlight) return { skipped: 'in-flight' };
+    _waterInFlight = true;
     const duration = 3000;
-    source.sendCommand({ cmd: 'water', duration_ms: duration });
-    S.saveLastWaterTs(now);
-    S.addEvent('watering',
-      kind === 'manual' ? 'Watered manually' : 'Auto-watered (low moisture)',
-      { duration_ms: duration });
+    try {
+      await source.sendCommand({ cmd: 'water', duration_ms: duration });
+      S.saveLastWaterTs(now);
+      S.addEvent('watering',
+        kind === 'manual' ? 'Watered manually' : 'Auto-watered (low moisture)',
+        { duration_ms: duration });
+      return { ok: true };
+    } finally {
+      _waterInFlight = false;
+    }
   }
 
   // ------------------------------------------------------------------------
@@ -204,22 +252,38 @@
       $('#res-bar-fill').style.width = '0';
     }
 
-    // Light tile
+    // Light tile — show the raw lux value plus the dim/medium/bright
+    // interpretation. The BH1750 reports lux directly; the label is just
+    // a friendlier readout (full explanation lives on the Live data tab).
     const lux = state.reading ? state.reading.light_lux : null;
     const tileLight = $('#tile-light');
-    tileLight.classList.remove('warn', 'bad');
+    tileLight.classList.remove('warn', 'bad', 'ps-dim', 'ps-medium', 'ps-bright');
     if (lux == null) {
       $('#light-value').textContent = '—';
       $('#light-sub').textContent = '';
     } else {
       $('#light-value').textContent = Math.round(lux).toLocaleString() + ' lx';
-      let descr = 'Bright indirect';
-      if (lux < 3000)       { descr = 'Too dim'; tileLight.classList.add('bad'); }
-      else if (lux < 10000) { descr = 'Low light'; tileLight.classList.add('warn'); }
-      else if (lux > 100000){ descr = 'Very intense'; tileLight.classList.add('warn'); }
-      else if (lux > 50000) { descr = 'Bright sun'; }
-      else                  { descr = `Ideal for ${plant.common_name.toLowerCase()}`; }
-      $('#light-sub').textContent = descr;
+      const label = interpretLux(lux);
+      if (label === 'dim')    tileLight.classList.add('bad');
+      if (label === 'medium') tileLight.classList.add('warn');
+      $('#light-sub').textContent = label || '—';
+    }
+
+    // Pump status line — surface the firmware's current pump state plus
+    // an explanation. Hidden for non-live herbs since the pump only
+    // applies to the wired (basil) plant.
+    const psWrap = $('#pump-status-line');
+    if (psWrap) {
+      if (!plant.live) {
+        psWrap.hidden = true;
+      } else {
+        psWrap.hidden = false;
+        const ps = (state.reading && state.reading.pump_status) || 'idle';
+        const explain = pumpStatusExplain(ps);
+        $('#pump-status-value').textContent = ps;
+        $('#pump-status-value').className = 'ps-' + (ps || '').toLowerCase();
+        $('#pump-status-explain').textContent = ' — ' + explain;
+      }
     }
 
     // Key metrics (small chips, secondary)
@@ -291,15 +355,25 @@
       } else if (v != null && def.key === 'reservoir_level') {
         indicator = `<div class="range-strip"><span class="indicator" style="left: calc(${Math.max(0, Math.min(100, v))}% - 2px)"></span></div>`;
       }
+      // Light gets the live dim/medium/bright interpretation too.
+      let luxLabel = '';
+      if (def.key === 'light_lux') {
+        const lbl = interpretLux(v);
+        if (lbl) luxLabel = `<div class="metric-tag ml-${lbl}">${lbl}</div>`;
+      }
+      const descTxt = def.description
+        ? `<p class="metric-description">${def.description}</p>` : '';
       return `<div class="metric-card ${cls}">
         <div class="top">
           <div class="icon">${def.icon}</div>
           <div class="name">${def.name}</div>
+          ${luxLabel}
         </div>
         <div class="value">${formatted == null ? '— no data —' : formatted + '<span class="unit">' + def.unit + '</span>'}</div>
         ${indicator}
         <div class="target">${idealTxt}</div>
         <div class="ts">${r.timestamp ? 'Updated ' + fmtTime(r.timestamp) : ''}</div>
+        ${descTxt}
       </div>`;
     }).join('');
   }
@@ -644,9 +718,50 @@
   });
 
   // Water now
-  $('#water-btn').addEventListener('click', () => {
-    triggerWatering(Date.now(), 'manual');
-    render();
+  // Water now — single command per click, lockout while in flight, then a
+  // brief cool-down to absorb double-clicks even after the POST returns.
+  // Feedback is announced via aria-live so screen readers pick it up.
+  let _waterFeedbackTimer = null;
+  function setWaterFeedback(text, level /* 'info' | 'ok' | 'error' */) {
+    const fb = $('#water-feedback');
+    if (!fb) return;
+    fb.classList.remove('info', 'ok', 'error');
+    if (level) fb.classList.add(level);
+    fb.textContent = text || '';
+    if (_waterFeedbackTimer) { clearTimeout(_waterFeedbackTimer); _waterFeedbackTimer = null; }
+    if (level === 'ok' || level === 'error') {
+      _waterFeedbackTimer = setTimeout(() => {
+        // Don't clobber a later message that overwrote ours.
+        if (fb.textContent === text) setWaterFeedback('', null);
+      }, 5000);
+    }
+  }
+
+  $('#water-btn').addEventListener('click', async () => {
+    if (_waterInFlight) return;       // belt
+    const btn = $('#water-btn');
+    if (btn.disabled) return;          // braces
+    btn.disabled = true;
+    setWaterFeedback('Sending water:3000 to the device…', 'info');
+    let result;
+    try {
+      result = await triggerWatering(Date.now(), 'manual');
+    } catch (e) {
+      setWaterFeedback(`Couldn't send the water command: ${e.message || e}`, 'error');
+    }
+    if (result && result.ok) {
+      setWaterFeedback('Watering command sent (water:3000).', 'ok');
+    } else if (result && result.skipped === 'in-flight') {
+      setWaterFeedback('Already sending… please wait a moment.', 'info');
+    } else if (result && result.skipped === 'not-live') {
+      setWaterFeedback('Watering is disabled for this herb. Switch to Basil in Settings.', 'info');
+    }
+    // Small cool-down to swallow rapid double-clicks even after the POST
+    // returns. Then re-enable based on the active herb's live status.
+    setTimeout(() => {
+      btn.disabled = !plant.live;
+      render();
+    }, 1200);
   });
 
   // Settings inputs
