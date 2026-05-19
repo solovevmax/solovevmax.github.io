@@ -17,7 +17,6 @@
     moisture_pct:  'moisture',
     temperature_c: 'temperature',
     humidity_pct:  'humidity',
-    ph:            'pH',
     light_lux:     'light',
     reservoir:     'reservoir',
   };
@@ -92,8 +91,6 @@
       'High humidity':   'the air is humid',
       'Low light':       `your ${plantName} needs more light`,
       'High light':      `your ${plantName} is in very strong light`,
-      'Low pH':          'soil pH is below the ideal range',
-      'High pH':         'soil pH is above the ideal range',
     };
     if (Object.values(subs).every(v => v >= 80)) {
       explanation = 'Thriving';
