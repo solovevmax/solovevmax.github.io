@@ -1,6 +1,10 @@
 /* localStorage helpers for Sprout and Spoon: settings, event log,
- * test mode state, planted dates, shopping list check-state, and
- * Adafruit IO configuration. Namespaced under "sproutandspoon.*". */
+ * test mode state, planted dates, plant source, and per-recipe
+ * shopping list check-state. Namespaced under "sproutandspoon.*".
+ *
+ * Adafruit IO credentials are NOT stored here — they live server-side
+ * in backend/.env so the AIO key never reaches the browser.
+ */
 (function (root) {
 
   const KEYS = {
@@ -13,30 +17,23 @@
     shopping:     'sproutandspoon.shopping.v1',
   };
 
-  const DEFAULT_AIO_FEEDS = {
-    moisture:        'soil-moisture',
-    temperature:     'temperature',
-    humidity:        'humidity',
-    light:           'light-level',
-    reservoir:       'water-reservoir',
-    pump_status:     'pump-status',
-    water_command:   'water-command',
-    selected_herb:   'selected-herb',
-  };
-
   const DEFAULTS = {
     selected_plant: 'basil',
     moisture_threshold_pct: 35,
     watering_cooldown_s: 600,
     low_reservoir_pct: 20,
-    stale_after_s: 10,
+    stale_after_s: 30,
     notifications_enabled: true,
-    data_source: 'mock',                  // 'mock' | 'serial' | 'adafruit'
-    aio_username: '',
-    aio_key: '',
-    aio_feeds: { ...DEFAULT_AIO_FEEDS },
-    aio_poll_interval_s: 5,
+    // Primary live channel is the local backend that proxies Adafruit IO.
+    // Browser never sees the AIO key.
+    data_source: 'backend',          // 'backend' | 'mock' | 'serial'
+    backend_url: '',                 // '' = same origin
+    backend_poll_interval_s: 10,
   };
+
+  // Field names that should NEVER appear in this app's localStorage going
+  // forward (they used to hold the AIO key in cleartext). Wiped on load.
+  const LEGACY_CREDENTIAL_FIELDS = ['aio_username', 'aio_key', 'aio_feeds'];
 
   function readJSON(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -48,11 +45,17 @@
 
   function loadSettings() {
     const stored = readJSON(KEYS.settings, {});
-    return {
-      ...DEFAULTS,
-      ...stored,
-      aio_feeds: { ...DEFAULT_AIO_FEEDS, ...(stored.aio_feeds || {}) },
-    };
+    // Migrate the old 'adafruit' value (which used direct AIO from the
+    // browser) to the new backend-proxied source.
+    if (stored.data_source === 'adafruit') stored.data_source = 'backend';
+    // Purge legacy credentials from prior versions of this app.
+    let purged = false;
+    for (const f of LEGACY_CREDENTIAL_FIELDS) {
+      if (f in stored) { delete stored[f]; purged = true; }
+    }
+    const merged = { ...DEFAULTS, ...stored };
+    if (purged) writeJSON(KEYS.settings, merged);
+    return merged;
   }
   function saveSettings(patch) {
     const next = { ...loadSettings(), ...patch };
@@ -94,14 +97,13 @@
   function loadPlantedDates() { return readJSON(KEYS.planted, {}); }
   function loadPlantedDate(plantId) {
     const all = loadPlantedDates();
-    return all[plantId] || null;          // ISO date string or null
+    return all[plantId] || null;
   }
   function savePlantedDate(plantId, iso) {
     const all = loadPlantedDates();
     all[plantId] = iso;
     writeJSON(KEYS.planted, all);
   }
-  // Ensure every herb has a planted date — default to today the first time.
   function ensurePlantedDate(plantId) {
     let iso = loadPlantedDate(plantId);
     if (!iso) {
@@ -113,7 +115,7 @@
 
   function loadShoppingState(recipeId) {
     const all = readJSON(KEYS.shopping, {});
-    return all[recipeId] || {};           // { itemId: true, ... }
+    return all[recipeId] || {};
   }
   function saveShoppingState(recipeId, state) {
     const all = readJSON(KEYS.shopping, {});
@@ -122,8 +124,6 @@
   }
 
   // Plant source: 'seeds' (default) or 'mature' (bought as a grown plant).
-  // Drives Recipes growth-tracker logic — mature plants are immediately
-  // harvest-ready and use "days since acquired" instead of "days since planted".
   const PLANT_SOURCE_VALUES = ['seeds', 'mature'];
   function loadPlantSources() { return readJSON(KEYS.plantSources, {}); }
   function loadPlantSource(plantId) {
@@ -148,7 +148,7 @@
   }
 
   root.HerbStorage = {
-    DEFAULTS, DEFAULT_AIO_FEEDS,
+    DEFAULTS,
     loadSettings, saveSettings,
     loadEvents, addEvent, addEventAt, clearEvents, setEvents, lastOf,
     loadTestMode, saveTestMode,
