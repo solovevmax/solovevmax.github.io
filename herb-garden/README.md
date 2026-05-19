@@ -1,104 +1,152 @@
 # Sprout and Spoon — local prototype
 
-A calm, mobile-first kitchen-garden companion app. **Pure static site** —
-no backend, no build step. Designed to talk to an Arduino Nano RP2040
-Connect over USB serial (COM port) **or** Adafruit IO over Wi-Fi, with a
-demo data path that always works as a fallback.
+A calm, mobile-first kitchen-garden companion app. The frontend is a
+**custom UI** (not an Adafruit IO dashboard) and talks to the smart
+garden through a small local **Flask backend** that proxies Adafruit
+IO. The Adafruit IO key lives only in `backend/.env` — the browser
+never sees it.
 
 ## Highlights
 
-- **Two comms paths + demo**: COM serial (Web Serial) and Adafruit IO
-  (HTTP REST polling) — selectable in Settings. If neither is configured
-  the app falls back to a believable demo source.
-- **Four herbs**: Basil (live, wired to the smart garden), plus Parsley,
-  Thyme and Mint as informational reference profiles.
-- **Recipes tab** with per-herb growth tracking from a planted date,
-  growth-stage recommendations, a rotating Recipe of the Day per herb,
-  and a Shopping List sub-view with persistent check-state.
-- **UK Seasonality** card inside Plant Profile — detects season from
-  today's date and ranks herbs by suitability with practical tips.
-- **Test Mode** stays as a fully-isolated manual sandbox for UI / logic
-  evaluation.
+- **Backend-first communication.** The frontend polls a local
+  Flask backend (`herb-garden/backend/app.py`) every 10 s; the backend
+  fans out to the AIO feeds in parallel and returns one merged
+  telemetry frame. The AIO key stays server-side.
+- **Optional USB serial debug.** The firmware also emits newline-
+  delimited JSON on `usb_cdc.data`. The app exposes a "Serial (debug)"
+  option in Settings for direct bench debugging; it is not the main
+  channel.
+- **Demo fallback.** When the backend is offline (or before you set up
+  AIO creds) the app falls back to a believable mock so the UI never
+  freezes.
+- **Four herbs**, Recipes tab, UK Seasonality, Test Mode — unchanged
+  from earlier milestones.
 
 ## Run it locally
 
 ```bash
-cd herb-garden
-python3 -m http.server 8000
+# 1. Install the backend deps (one time).
+cd herb-garden/backend
+pip install -r requirements.txt
+
+# 2. Configure Adafruit IO credentials (one time).
+cp .env.example .env
+# Edit .env and fill in AIO_USERNAME and AIO_KEY.
+
+# 3. Start the backend (serves the API and the static frontend).
+python app.py
 ```
 
-Open <http://localhost:8000>.
+Open <http://127.0.0.1:8000>.
 
-Any static server works (`npx serve`, `php -S`, etc). A server is needed
-because the JS is split into multiple files and Web Serial requires a
-secure context — `localhost` qualifies.
+`python app.py` reads `backend/.env`, starts Flask on
+`127.0.0.1:8000`, and serves `herb-garden/index.html` at `/` so the
+backend and frontend share an origin (no CORS headaches).
 
-## Open it on your phone for UI testing
+To bind on every interface (for phone testing on the same Wi-Fi):
 
-Both devices on the same Wi-Fi network:
+```bash
+HOST=0.0.0.0 PORT=8000 python app.py
+```
 
-1. `python3 -m http.server 8000 --bind 0.0.0.0` (the default `0.0.0.0`
-   already binds to every interface; `--bind` is just explicit).
-2. Find your computer's local IP:
-   - macOS (Wi-Fi): `ipconfig getifaddr en0`
-   - Linux: `hostname -I`
-   - Windows: `ipconfig` → IPv4 line of the Wi-Fi adapter
-3. Open `http://<your-local-ip>:8000` on your phone.
-4. If unreachable, allow port 8000 through your computer's firewall
-   (macOS Firewall settings; Windows Defender → "Allow an app";
-   Linux `sudo ufw allow 8000/tcp`).
+Then open `http://<your-local-ip>:8000` on your phone.
+
+## Environment variables (backend/.env)
+
+| Variable                       | Required | Default            | Notes |
+|--------------------------------|----------|--------------------|-------|
+| `AIO_USERNAME`                 | yes      | —                  | Adafruit IO username |
+| `AIO_KEY`                      | yes      | —                  | AIO key from io.adafruit.com/my-key |
+| `AIO_FEED_MOISTURE`            | no       | `soil-moisture`    | telemetry feed slug |
+| `AIO_FEED_TEMPERATURE`         | no       | `temperature`      | telemetry feed slug |
+| `AIO_FEED_HUMIDITY`            | no       | `humidity`         | telemetry feed slug |
+| `AIO_FEED_LIGHT`               | no       | `light-level`      | telemetry feed slug |
+| `AIO_FEED_RESERVOIR`           | no       | `water-reservoir`  | telemetry feed slug |
+| `AIO_FEED_PUMP_STATUS`         | no       | `pump-status`      | telemetry feed slug |
+| `AIO_FEED_WATER_COMMAND`       | no       | `water-command`    | command feed slug |
+| `AIO_FEED_SELECTED_HERB`       | no       | `selected-herb`    | command feed slug |
+| `HOST`                         | no       | `127.0.0.1`        | bind address |
+| `PORT`                         | no       | `8000`             | bind port |
+| `FLASK_DEBUG`                  | no       | `0`                | `1` enables the Flask reloader |
+
+If `AIO_USERNAME` / `AIO_KEY` are unset, the backend stays up but
+returns `503` from `/api/telemetry`; the frontend displays "Backend:
+no AIO creds" so it's obvious what's missing.
+
+## Backend API
+
+| Endpoint                  | Method | Purpose |
+|---------------------------|--------|---------|
+| `/`                       | GET    | serves the static frontend |
+| `/api/health`             | GET    | `{ ok, configured, feeds }` |
+| `/api/telemetry`          | GET    | latest reading merged across the six AIO telemetry feeds; `503` if creds missing |
+| `/api/water`              | POST   | `{ "duration_ms": 3000 }` → writes `water:3000` to the `water-command` feed |
+| `/api/selected-herb`      | POST   | `{ "herb": "basil" }` → writes the herb id to the `selected-herb` feed |
+
+`/api/telemetry` response shape:
+
+```json
+{
+  "configured": true,
+  "fetched_at": "2026-05-19T14:32:05Z",
+  "moisture_pct": 42.3,
+  "temperature_c": 22.1,
+  "humidity_pct": 55.0,
+  "light_lux": 12000,
+  "reservoir_level": 80,
+  "pump_status": "idle",
+  "timestamp": "2026-05-19T14:32:01Z",
+  "time_valid": true,
+  "feed_errors": {}
+}
+```
+
+- `timestamp` is the newest `created_at` across the polled feeds, or
+  `null` if every feed is empty.
+- `time_valid` is `true` whenever the backend got a usable
+  `created_at`, mirroring the firmware's signal so the frontend can
+  render "Device · 5s ago" vs "Received · 5s ago" gracefully.
 
 ## Where everything is configured
 
 | What                | Where                                                    |
 |---------------------|----------------------------------------------------------|
-| **Adafruit IO**     | Settings → Connection (pick "Adafruit IO (Wi-Fi)" → fill username, key, feed names) — stored locally in `localStorage` keys `sproutandspoon.settings.v1` |
-| **COM / Serial**    | Settings → Connection (pick "COM port / Serial (Arduino)" → "Connect Arduino" button uses Web Serial, Chrome/Edge only) |
-| **Herb data**       | `js/plants.js` — the `PLANTS` object (basil/parsley/thyme/mint) + `ILLUSTRATIONS` SVG map |
-| **Recipe data**     | `js/recipes.js` — `RECIPES` keyed by herb id (3 recipes each, edit / add freely) |
-| **Shopping list**   | Derived from a recipe's `ingredients` array; check-state persists in localStorage key `sproutandspoon.shopping.v1` |
-| **Seasonality**     | `js/seasonality.js` — `TABLE` (per-herb / per-season tier + tip) and `GROW_HINT` |
-| **Planted dates**   | Settings → Garden ("Planted date" / "Date acquired" input). Persists per herb in `sproutandspoon.plantedDates.v1` |
-| **Plant source**    | Settings → Garden ("From seed" / "Shop-bought · mature" toggle). Persists per herb in `sproutandspoon.plantSources.v1`. Drives growth-stage logic in Recipes |
-| **Plant Health**    | `js/health.js` — the scoring formula (unchanged from prior milestones) |
+| **Adafruit IO creds** | `backend/.env` (`AIO_USERNAME`, `AIO_KEY`). Never in the browser. |
+| **AIO feed slugs**  | `backend/.env` (`AIO_FEED_*`) or the defaults baked into `backend/app.py` |
+| **Backend URL / poll interval** | Settings → Connection (frontend). Defaults: same-origin, 10 s poll |
+| **Serial (debug)**  | Settings → Connection, pick "Serial (debug only)" → "Connect Arduino". Web Serial; Chrome/Edge only. |
+| **Herb data**       | `js/plants.js` — the `PLANTS` object + `ILLUSTRATIONS` |
+| **Recipe data**     | `js/recipes.js` — `RECIPES` keyed by herb id |
+| **Shopping list**   | Derived from a recipe's `ingredients`; check-state persists in `sproutandspoon.shopping.v1` |
+| **Seasonality**     | `js/seasonality.js` |
+| **Planted dates / plant source** | Settings → Garden. Persist per-herb in `sproutandspoon.plantedDates.v1` / `sproutandspoon.plantSources.v1` |
+| **Plant Health**    | `js/health.js` |
 
-## Adafruit IO setup
+## Serial schema (firmware ↔ app, debug only)
 
-In Settings → Connection, pick **Adafruit IO (Wi-Fi)** and fill in:
-
-- **Username**: your `io.adafruit.com` account name.
-- **AIO key**: from `io.adafruit.com/my-key`. Stored only in your browser
-  via `localStorage`.
-- **Feed keys** for the 8 fields: moisture, temperature, humidity, light,
-  reservoir, pump-status, water-command, selected-herb (optional). These
-  are the *feed keys* (URL slugs) — not the human display names.
-
-The Arduino publishes telemetry to the read-only feeds (~1 Hz works
-well). The app polls each feed via REST (`/data/last`) every 5 seconds
-and POSTs the water command to the `water_command` feed as a string
-value like `"water:3000"`.
-
-## Serial schema (unchanged)
-
-When using **COM port / Serial**, the Arduino emits one JSON object per
-line at 115200 baud:
+The firmware emits one JSON object per line at 115 200 baud on
+`usb_cdc.data`:
 
 ```json
-{"timestamp":"2026-05-17T12:34:56Z","moisture":42.3,"temperature":22.1,
+{"timestamp":"2026-05-19T14:32:01Z","moisture":42.3,"temperature":22.1,
  "humidity":55,"light_lux":12000,"reservoir_level":80,
- "pump_event":null}
+ "pump_event":null,"time_valid":true}
 ```
 
-Unknown fields are silently ignored, so existing firmware that still
-emits a `ph` value will continue to work — the field just isn't used.
+- `time_valid` is the new flag from the firmware. When `false`, the
+  frontend falls back to "Received · Xs ago" using the receipt time
+  instead of the device timestamp.
+- Unknown fields are ignored, so older firmware that still emits `ph`
+  remains compatible.
 
-App → Arduino command:
+App → firmware command:
+
 ```json
 {"cmd":"water","duration_ms":3000}
 ```
 
-Out-of-range and malformed values are scrubbed at the source layer
-(`js/sources.js` → `normalize()` / `clean()`).
+Out-of-range and malformed values are scrubbed in
+`js/sources.js → normalize()`.
 
 ## Architecture
 
@@ -108,41 +156,23 @@ herb-garden/
 ├── styles.css
 ├── js/
 │   ├── plants.js        # PLANTS DB + Test Mode SCENARIOS + ILLUSTRATIONS
-│   ├── health.js        # Plant Health formula (unchanged)
-│   ├── storage.js       # localStorage wrappers (sproutandspoon.*)
-│   ├── sources.js       # LiveMockSource | SerialSource | AdafruitIOSource
-│   ├── recipes.js       # RECIPES + recipeOfTheDay() + growthStage()
-│   ├── seasonality.js   # currentSeason() + herbSuitability() (UK)
-│   └── app.js           # Controller + UI rendering + tab routing
+│   ├── health.js        # Plant Health formula
+│   ├── storage.js       # localStorage wrappers (no creds — purges legacy keys)
+│   ├── sources.js       # BackendSource | LiveMockSource | SerialSource
+│   ├── recipes.js
+│   ├── seasonality.js
+│   └── app.js
+├── backend/
+│   ├── app.py           # Flask proxy + static file server
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── .gitignore       # .env, __pycache__, venvs
 └── README.md
 ```
 
 The DataSource interface — `start / stop / getLatest / sendCommand /
-isConnected / isStale / sourceLabel / lastSyncMs / allowAutoWater` —
-is the only seam the comms layer needs. Adding another transport (e.g.
-local MQTT) means writing one new class implementing that shape and
-adding a branch in `makeSource()` in `js/app.js`.
-
-## Multi-herb behavior
-
-| Herb     | live wiring | auto-water | event log writes | info cards | recipes |
-|----------|-------------|------------|------------------|------------|---------|
-| Basil    | ✓           | ✓          | ✓                | ✓          | ✓       |
-| Parsley  | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
-| Thyme    | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
-| Mint     | ✗ (demo)    | ✗          | ✗                | ✓          | ✓       |
-
-Selecting a non-basil herb shows the "Demo profile" note on Home and
-disables the Water now button. Recipes, seasonality and growth tracking
-all still work for any selected herb.
-
-## Adding a new herb
-
-In `js/plants.js`, add an entry to `PLANTS` with the same shape as
-`basil` or `parsley`. Set `live: false` unless you've wired the smart
-garden hardware to react to it. Add 3 recipes in `js/recipes.js` under
-the new id, and an `ILLUSTRATIONS` entry in `js/plants.js`. The herb
-picker, dropdowns, and seasonality table pick it up automatically.
+isConnected / isStale / sourceLabel / lastSyncMs / publishSelectedHerb`
+— is the only seam the comms layer needs.
 
 ## Plant Health formula
 
@@ -155,7 +185,6 @@ For each metric `m` with value `v` and ranges `{ideal, ok}`:
 Reservoir sub-score = `clamp(level%, 0, 100)`.
 
 Metrics scored: soil moisture (30%), temperature (25%), light (20%),
-humidity (15%), reservoir (10%). pH is intentionally not scored —
-the prototype hardware doesn't include a pH sensor.
+humidity (15%), reservoir (10%). pH is intentionally not scored.
 
 `PlantHealth = round(Σ wₘ · sₘ / Σ wₘ)`, clamped to 1–100.

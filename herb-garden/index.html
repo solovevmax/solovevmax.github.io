@@ -67,7 +67,7 @@
   <!-- Demo banner (live mode, mock source only) -->
   <div class="banner" id="demo-banner">
     <span class="pill">Demo</span>
-    <span id="banner-msg">Using mock readings. Choose <strong>Adafruit IO</strong> or <strong>Live serial</strong> in <strong>Settings → Connection</strong>, or open the <strong>Test</strong> tab to try scenarios manually.</span>
+    <span id="banner-msg">Using mock readings. Start the local backend (<code>python backend/app.py</code>) and pick <strong>Adafruit IO (via local backend)</strong> in <strong>Settings → Connection</strong> for live data, or open the <strong>Test</strong> tab to explore scenarios.</span>
   </div>
 
   <!-- Tab nav -->
@@ -343,82 +343,50 @@
         <div class="field">
           <div>
             <label for="set-source">Data source</label>
-            <p class="hint">Mock data, USB serial, or Adafruit IO over Wi-Fi</p>
+            <p class="hint">Backend proxies Adafruit IO; serial is debug-only</p>
           </div>
           <select id="set-source">
+            <option value="backend">Adafruit IO (via local backend)</option>
             <option value="mock">Mock / Demo</option>
-            <option value="serial">COM port / Serial (Arduino)</option>
-            <option value="adafruit">Adafruit IO (Wi-Fi)</option>
+            <option value="serial">Serial (debug only)</option>
           </select>
         </div>
 
-        <!-- Serial connection group -->
-        <div class="field" id="serial-status-row">
+        <!-- Backend group (visible by default; this is the primary path) -->
+        <div id="backend-config">
+          <div class="field">
+            <div>
+              <label for="backend-url">Backend URL</label>
+              <p class="hint">Empty = same origin (when the Flask backend serves this app). Otherwise e.g. <code>http://localhost:8000</code>.</p>
+            </div>
+            <input id="backend-url" type="text" placeholder="(same origin)"/>
+          </div>
+          <div class="field">
+            <div>
+              <label for="backend-poll">Poll interval</label>
+              <p class="hint">Seconds between backend polls (5–60)</p>
+            </div>
+            <input id="backend-poll" type="number" min="5" max="60" step="1"/>
+          </div>
+          <div class="field">
+            <div>
+              <label>Backend status</label>
+              <p class="hint" id="backend-status-hint">Waiting for first sync…</p>
+            </div>
+            <button class="btn ghost" id="test-backend" type="button">Test connection</button>
+          </div>
+          <p class="hint" style="margin-top:4px">
+            Adafruit IO credentials are stored server-side in <code>backend/.env</code> — never in the browser.
+          </p>
+        </div>
+
+        <!-- Serial debug group (hidden unless serial is selected) -->
+        <div class="field" id="serial-status-row" hidden>
           <div>
-            <label>Serial port</label>
+            <label>Serial port (debug)</label>
             <p class="hint" id="serial-port-hint">Not connected</p>
           </div>
           <button class="btn ghost" id="connect-serial">Connect Arduino</button>
-        </div>
-
-        <!-- Adafruit IO group (hidden unless adafruit is selected) -->
-        <div id="aio-config" hidden>
-          <div class="field">
-            <div>
-              <label for="aio-username">Adafruit IO username</label>
-              <p class="hint">Your io.adafruit.com account name</p>
-            </div>
-            <input id="aio-username" type="text" placeholder="your-username"/>
-          </div>
-          <div class="field">
-            <div>
-              <label for="aio-key">AIO key</label>
-              <p class="hint">Stored locally in your browser only</p>
-            </div>
-            <input id="aio-key" type="password" placeholder="aio_xxxxxxxx"/>
-          </div>
-          <div class="field">
-            <div>
-              <label for="aio-feed-moisture">Moisture feed</label>
-              <p class="hint">Feed key (not the human name)</p>
-            </div>
-            <input id="aio-feed-moisture" type="text" placeholder="soil-moisture"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-temperature">Temperature feed</label></div>
-            <input id="aio-feed-temperature" type="text" placeholder="temperature"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-humidity">Humidity feed</label></div>
-            <input id="aio-feed-humidity" type="text" placeholder="humidity"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-light">Light feed</label></div>
-            <input id="aio-feed-light" type="text" placeholder="light-level"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-reservoir">Reservoir feed</label></div>
-            <input id="aio-feed-reservoir" type="text" placeholder="water-reservoir"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-pump">Pump status feed</label></div>
-            <input id="aio-feed-pump" type="text" placeholder="pump-status"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-cmd">Water command feed</label></div>
-            <input id="aio-feed-cmd" type="text" placeholder="water-command"/>
-          </div>
-          <div class="field">
-            <div><label for="aio-feed-herb">Selected herb feed (optional)</label></div>
-            <input id="aio-feed-herb" type="text" placeholder="selected-herb"/>
-          </div>
-          <div class="field">
-            <div>
-              <label>Connection status</label>
-              <p class="hint" id="aio-status-hint">Not yet connected</p>
-            </div>
-            <button class="btn ghost" id="test-aio" type="button">Test connection</button>
-          </div>
         </div>
       </div>
 

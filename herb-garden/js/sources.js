@@ -9,8 +9,16 @@
  *   sourceLabel         - human string
  *
  * Reading shape (after normalization):
- *   { timestamp, moisture_pct, temperature_c, humidity_pct,
- *     light_lux, reservoir_level, pump_event }
+ *   { timestamp, time_valid, moisture_pct, temperature_c, humidity_pct,
+ *     light_lux, reservoir_level, pump_event, pump_status }
+ *
+ * Source roles:
+ *   BackendSource    - primary live channel. Talks to the local Flask
+ *                      backend which owns the Adafruit IO key.
+ *   LiveMockSource   - default fallback when the backend is unreachable.
+ *   SerialSource     - optional USB debug channel. Same JSON-per-line
+ *                      schema as before; the firmware exposes it on
+ *                      usb_cdc.data.
  */
 (function (root) {
 
@@ -31,21 +39,38 @@
     return n;
   }
 
+  // Accept ISO 8601 with either "Z" or numeric offset. Anything that fails
+  // to parse comes back as null so the UI can fall back to receipt time.
+  function safeIso(v) {
+    if (v == null || v === '') return null;
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString();
+  }
+
   function normalize(raw) {
+    const ts = safeIso(raw.timestamp);
+    // The firmware emits an explicit time_valid boolean over serial; over
+    // AIO it's true whenever the backend reports a usable created_at.
+    let timeValid = raw.time_valid;
+    if (timeValid == null) timeValid = ts != null;
     return {
-      timestamp: raw.timestamp || new Date().toISOString(),
+      timestamp: ts,                 // null = device clock not usable
+      time_valid: !!timeValid,
       moisture_pct:    clean('moisture_pct',    raw.moisture_pct    ?? raw.moisture),
       temperature_c:   clean('temperature_c',   raw.temperature_c   ?? raw.temperature),
       humidity_pct:    clean('humidity_pct',    raw.humidity_pct    ?? raw.humidity),
       light_lux:       clean('light_lux',       raw.light_lux),
       reservoir_level: clean('reservoir_level', raw.reservoir_level),
       pump_event:      raw.pump_event ?? null,
+      pump_status:     raw.pump_status ?? null,
     };
   }
 
   // -------------------------------------------------------------------------
   // LiveMockSource — believable drift. Moisture trickles down so the auto-
-  // water threshold actually fires. Default source when no scenario picked.
+  // water threshold actually fires. Used as a fallback when the backend
+  // isn't running yet, and as the standalone Demo source.
   // -------------------------------------------------------------------------
   class LiveMockSource {
     constructor(intervalMs = 1000) {
@@ -62,7 +87,6 @@
       if (this._timer) return;
       const tick = () => {
         this._t += this._interval / 1000;
-        // Drift moisture down (~0.3 %/s). After ~80s from 58% we'd hit 35%.
         this._moisture = Math.max(5, this._moisture - 0.3);
         let pumpEvent = null;
         if (this._pendingPumpEvent) {
@@ -76,12 +100,14 @@
         const lux   = Math.max(0, 24000 + 18000 * Math.sin(this._t / 90) + (Math.random() - 0.5) * 1500);
         this._reading = {
           timestamp: new Date().toISOString(),
+          time_valid: true,
           moisture_pct: Math.round(this._moisture * 10) / 10,
           temperature_c: Math.round(temp * 10) / 10,
           humidity_pct: Math.round(hum * 10) / 10,
           light_lux: Math.round(lux),
           reservoir_level: Math.round(this._reservoir * 10) / 10,
           pump_event: pumpEvent,
+          pump_status: pumpEvent === 'completed' ? 'completed' : 'idle',
         };
       };
       tick();
@@ -90,23 +116,153 @@
     stop() { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
     getLatest() { return this._reading; }
     sendCommand(cmd) { if (cmd && cmd.cmd === 'water') this._pendingPumpEvent = true; }
+    async publishSelectedHerb(_) { /* mock no-op */ }
     isConnected() { return true; }
     isStale() { return false; }
-    lastSyncMs() { return Date.now(); }  // always fresh
+    lastSyncMs() { return Date.now(); }
   }
 
   // -------------------------------------------------------------------------
-  // SerialSource — Web Serial API. Reads JSON-per-line frames; writes
-  // commands as JSON+newline. Stub if API isn't available.
+  // BackendSource — primary live channel. Polls a local Flask backend that
+  // owns the Adafruit IO key. The AIO key is NEVER exposed to this frontend.
+  //
+  // Endpoints used (served by herb-garden/backend/app.py):
+  //   GET  /api/telemetry         -> latest reading from all AIO feeds
+  //   POST /api/water             -> { duration_ms } => writes water:<ms>
+  //   POST /api/selected-herb     -> { herb }        => writes herb id
+  //   GET  /api/health            -> { configured, feeds }
+  // -------------------------------------------------------------------------
+  class BackendSource {
+    constructor(config = {}) {
+      this._baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
+      this._pollMs = config.pollIntervalMs || 10_000;     // 10 s default
+      this._staleAfter = config.staleAfterMs || 30_000;   // 30 s = stale
+      this._timer = null;
+      this._reading = null;
+      this._lastSyncTs = 0;
+      this._lastError = null;
+      this._configured = null;
+      this._connected = false;
+      this._inFlight = false;
+      this.sourceLabel = 'Adafruit IO (via backend)';
+      this.allowAutoWater = true;
+    }
+
+    _url(path) { return this._baseUrl + path; }
+
+    async _pollOnce() {
+      if (this._inFlight) return;
+      this._inFlight = true;
+      try {
+        const r = await fetch(this._url('/api/telemetry'), {
+          headers: { 'Accept': 'application/json' },
+          cache: 'no-store',
+        });
+        // 503 = backend running but missing AIO credentials.
+        if (r.status === 503) {
+          const body = await r.json().catch(() => ({}));
+          this._configured = false;
+          this._lastError = body.error || 'Backend missing AIO credentials';
+          this._connected = false;
+          return;
+        }
+        if (!r.ok) {
+          this._lastError = `Backend HTTP ${r.status}`;
+          this._connected = false;
+          return;
+        }
+        const data = await r.json();
+        this._configured = data.configured !== false;
+        this._reading = normalize({
+          timestamp:       data.timestamp,
+          time_valid:      data.time_valid,
+          moisture_pct:    data.moisture_pct,
+          temperature_c:   data.temperature_c,
+          humidity_pct:    data.humidity_pct,
+          light_lux:       data.light_lux,
+          reservoir_level: data.reservoir_level,
+          pump_status:     data.pump_status,
+          // Translate the firmware's pump_status string into the
+          // pump_event the rest of the app's UI already understands.
+          pump_event: typeof data.pump_status === 'string' &&
+                      /complete|done|ok/i.test(data.pump_status)
+                      ? 'completed' : null,
+        });
+        this._lastSyncTs = Date.now();
+        this._connected = true;
+        this._lastError = (data.feed_errors && Object.keys(data.feed_errors).length)
+          ? `Feed errors: ${Object.keys(data.feed_errors).join(', ')}`
+          : null;
+      } catch (e) {
+        // Backend not running, network error, CORS, etc.
+        this._lastError = e.message || String(e);
+        this._connected = false;
+      } finally {
+        this._inFlight = false;
+      }
+    }
+
+    start() {
+      if (this._timer) return;
+      this._pollOnce();
+      this._timer = setInterval(() => this._pollOnce(), this._pollMs);
+    }
+    stop() {
+      if (this._timer) { clearInterval(this._timer); this._timer = null; }
+      this._connected = false;
+    }
+    getLatest() { return this._reading; }
+
+    async sendCommand(cmd) {
+      if (!cmd || cmd.cmd !== 'water') return;
+      try {
+        const r = await fetch(this._url('/api/water'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ duration_ms: cmd.duration_ms || 3000 }),
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          this._lastError = body.error || `Water POST HTTP ${r.status}`;
+        }
+      } catch (e) {
+        this._lastError = e.message || String(e);
+      }
+    }
+
+    async publishSelectedHerb(herb) {
+      if (!herb) return;
+      try {
+        await fetch(this._url('/api/selected-herb'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ herb }),
+        });
+      } catch (_) { /* best-effort */ }
+    }
+
+    isConnected() { return this._connected && !this.isStale(); }
+    isStale() {
+      return this._lastSyncTs > 0 && (Date.now() - this._lastSyncTs) > this._staleAfter;
+    }
+    lastSyncMs() { return this._lastSyncTs; }
+    lastError()  { return this._lastError; }
+    isConfigured() { return this._configured !== false; }
+  }
+
+  // -------------------------------------------------------------------------
+  // SerialSource — optional USB debug channel. Reads JSON-per-line frames
+  // from the firmware's usb_cdc.data port; writes commands as JSON+newline.
+  // Stub if the Web Serial API isn't available.
   // -------------------------------------------------------------------------
   class SerialSource {
-    constructor(staleAfterMs = 10000) {
+    constructor(staleAfterMs = 30_000) {
       this._port = null; this._reader = null; this._writer = null;
       this._buf = ''; this._reading = null;
       this._lastUpdate = 0; this._connected = false;
       this._staleAfter = staleAfterMs;
-      this.sourceLabel = 'Live serial';
-      this.allowAutoWater = true;
+      this.sourceLabel = 'Serial (debug)';
+      this.allowAutoWater = false;   // debug channel — let the cloud drive
     }
     static isSupported() { return 'serial' in navigator; }
     async connect() {
@@ -157,6 +313,7 @@
       const enc = new TextEncoder();
       this._writer.write(enc.encode(JSON.stringify(cmd) + '\n')).catch(() => {});
     }
+    async publishSelectedHerb(_) { /* serial: no separate selected-herb channel */ }
     isConnected() { return this._connected && !this.isStale(); }
     isStale() {
       return this._connected
@@ -166,161 +323,7 @@
     lastSyncMs() { return this._lastUpdate; }
   }
 
-  // -------------------------------------------------------------------------
-  // AdafruitIOSource — HTTP REST polling against io.adafruit.com.
-  // Telemetry feeds are GETted in parallel each tick; the water command POSTs
-  // to a single command feed. Same DataSource interface as the others.
-  // -------------------------------------------------------------------------
-  class AdafruitIOSource {
-    constructor(config) {
-      // config: { username, key, feeds: { moisture, temperature, humidity,
-      //          light, reservoir, pump_status, water_command, selected_herb },
-      //          pollIntervalMs, staleAfterMs }
-      this.username = (config.username || '').trim();
-      this.key = (config.key || '').trim();
-      this.feeds = config.feeds || {};
-      this._pollMs = config.pollIntervalMs || 5000;
-      this._staleAfter = config.staleAfterMs || 15000;
-      this._timer = null;
-      this._reading = null;
-      this._lastSyncTs = 0;
-      this._lastError = null;
-      this._connected = false;
-      this._inFlight = false;
-      this.sourceLabel = 'Adafruit IO';
-      this.allowAutoWater = true;
-    }
-    isConfigured() {
-      return Boolean(this.username && this.key);
-    }
-    _url(feedKey) {
-      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
-             `/feeds/${encodeURIComponent(feedKey)}/data/last`;
-    }
-    _cmdUrl(feedKey) {
-      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
-             `/feeds/${encodeURIComponent(feedKey)}/data`;
-    }
-    async _fetchLast(feedKey) {
-      if (!feedKey) return null;
-      try {
-        const r = await fetch(this._url(feedKey), {
-          headers: { 'X-AIO-Key': this.key, 'Accept': 'application/json' },
-        });
-        if (!r.ok) {
-          // 404 = feed not yet created, treat as no data, not as error
-          if (r.status === 404) return null;
-          throw new Error(`AIO ${feedKey}: HTTP ${r.status}`);
-        }
-        return await r.json();   // { id, value, created_at, feed_id, ... }
-      } catch (e) {
-        this._lastError = e.message || String(e);
-        return null;
-      }
-    }
-    async _pollOnce() {
-      if (this._inFlight) return;
-      this._inFlight = true;
-      try {
-        const f = this.feeds;
-        const [m, t, h, l, r, p] = await Promise.all([
-          this._fetchLast(f.moisture),
-          this._fetchLast(f.temperature),
-          this._fetchLast(f.humidity),
-          this._fetchLast(f.light),
-          this._fetchLast(f.reservoir),
-          this._fetchLast(f.pump_status),
-        ]);
-        // If every feed call returned null AND we have no prior reading,
-        // treat that as not-yet-connected. Otherwise build the merged frame.
-        if (!m && !t && !h && !l && !r && !p && !this._reading) {
-          this._connected = false;
-          return;
-        }
-        const latest = newest([m, t, h, l, r, p]);
-        const raw = {
-          timestamp:       latest ? latest.created_at : new Date().toISOString(),
-          moisture_pct:    m ? m.value : null,
-          temperature_c:   t ? t.value : null,
-          humidity_pct:    h ? h.value : null,
-          light_lux:       l ? l.value : null,
-          reservoir_level: r ? r.value : null,
-          pump_event:      p && /complete|done|ok/i.test(String(p.value)) ? 'completed' : null,
-        };
-        this._reading = normalize(raw);
-        this._lastSyncTs = Date.now();
-        this._connected = true;
-        this._lastError = null;
-      } finally {
-        this._inFlight = false;
-      }
-    }
-    start() {
-      if (!this.isConfigured()) {
-        this._lastError = 'Adafruit IO username and key required';
-        return;
-      }
-      if (this._timer) return;
-      this._pollOnce();        // immediate first poll
-      this._timer = setInterval(() => this._pollOnce(), this._pollMs);
-    }
-    stop() {
-      if (this._timer) { clearInterval(this._timer); this._timer = null; }
-      this._connected = false;
-    }
-    getLatest() { return this._reading; }
-    async sendCommand(cmd) {
-      if (!cmd || cmd.cmd !== 'water') return;
-      const feed = this.feeds.water_command;
-      if (!feed) return;
-      const value = `water:${cmd.duration_ms || 3000}`;
-      try {
-        await fetch(this._cmdUrl(feed), {
-          method: 'POST',
-          headers: {
-            'X-AIO-Key': this.key,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify({ value }),
-        });
-      } catch (e) {
-        this._lastError = e.message || String(e);
-      }
-    }
-    // Optional: publish the currently selected herb so the device knows.
-    async publishSelectedHerb(plantId) {
-      const feed = this.feeds.selected_herb;
-      if (!feed || !this.isConfigured()) return;
-      try {
-        await fetch(this._cmdUrl(feed), {
-          method: 'POST',
-          headers: {
-            'X-AIO-Key': this.key,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ value: plantId }),
-        });
-      } catch (_) { /* best-effort */ }
-    }
-    isConnected() { return this._connected && !this.isStale(); }
-    isStale() {
-      return this._lastSyncTs > 0 && (Date.now() - this._lastSyncTs) > this._staleAfter;
-    }
-    lastSyncMs() { return this._lastSyncTs; }
-    lastError() { return this._lastError; }
-  }
-
-  function newest(items) {
-    let best = null;
-    for (const it of items) {
-      if (!it || !it.created_at) continue;
-      if (!best || it.created_at > best.created_at) best = it;
-    }
-    return best;
-  }
-
   root.HerbSources = {
-    LiveMockSource, SerialSource, AdafruitIOSource, normalize,
+    LiveMockSource, SerialSource, BackendSource, normalize,
   };
 })(window);

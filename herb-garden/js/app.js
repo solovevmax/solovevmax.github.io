@@ -1,6 +1,7 @@
 /* Sprout and Spoon — main app:
- * - Live-mode controller (auto-water, alerts) for whichever data source the
- *   user picks (LiveMock / Serial / Adafruit IO).
+ * - Live-mode controller (auto-water, alerts). The primary live channel is
+ *   the local Flask backend (BackendSource), which owns the Adafruit IO
+ *   key. Demo and Serial are fallback / debug options.
  * - UI rendering for Home, Live, History, Plant Profile, Settings, Alerts,
  *   Test Mode, Recipes, and the Shopping List sub-view.
  * - Multi-herb gating: only Basil triggers live actions (auto-water, pump
@@ -9,7 +10,7 @@
 (function () {
   const { PLANTS, SCENARIOS, ILLUSTRATIONS, getPlant, listPlants } = window.HerbPlants;
   const { computeHealth, bucket } = window.HerbHealth;
-  const { LiveMockSource, SerialSource, AdafruitIOSource } = window.HerbSources;
+  const { LiveMockSource, SerialSource, BackendSource } = window.HerbSources;
   const { RECIPES, recipeOfTheDay, growthStage } = window.SproutRecipes;
   const { currentSeason, herbSuitability } = window.SproutSeasonality;
   const S = window.HerbStorage;
@@ -41,20 +42,15 @@
       if (settings.data_source === 'serial' && SerialSource.isSupported()) {
         return new SerialSource(settings.stale_after_s * 1000);
       }
-      if (settings.data_source === 'adafruit') {
-        const src = new AdafruitIOSource({
-          username: settings.aio_username,
-          key: settings.aio_key,
-          feeds: settings.aio_feeds,
-          pollIntervalMs: (settings.aio_poll_interval_s || 5) * 1000,
-          staleAfterMs: (settings.stale_after_s || 10) * 1000 * 2,
-        });
-        if (!src.isConfigured()) {
-          // Fall back; the AIO config panel makes the missing-config obvious.
-          return new LiveMockSource();
-        }
-        return src;
+      if (settings.data_source === 'mock') {
+        return new LiveMockSource();
       }
+      // Default: backend-proxied Adafruit IO. The browser never sees the key.
+      return new BackendSource({
+        baseUrl: settings.backend_url || '',
+        pollIntervalMs: (settings.backend_poll_interval_s || 10) * 1000,
+        staleAfterMs: (settings.stale_after_s || 30) * 1000,
+      });
     } catch (e) {
       // Any source construction failure → graceful demo fallback.
       try { S.addEvent('alert', 'Data source failed to start: ' + (e.message || e)); } catch (_) {}
@@ -452,8 +448,9 @@
     plant = getPlant(plantId);
     S.ensurePlantedDate(plantId);
     S.ensurePlantSource(plantId);
-    // Tell Adafruit IO (best-effort) which herb is now selected.
-    if (source instanceof AdafruitIOSource && source.publishSelectedHerb) {
+    // Best-effort: tell the device (via the backend) which herb is now
+    // selected. The backend translates this into an AIO feed write.
+    if (source && typeof source.publishSelectedHerb === 'function') {
       source.publishSelectedHerb(plantId);
     }
     renderHerbPicker();
@@ -464,21 +461,23 @@
   }
 
   // Connection chip + demo banner.
-  // Labels reflect the active source type: Adafruit IO / Serial / Demo / Stale / Disconnected.
+  // Labels reflect the active source type:
+  //   Backend (Adafruit IO) / Serial / Demo / Stale / Disconnected /
+  //   "Backend: no AIO creds" when the backend is reachable but the
+  //   AIO env vars haven't been set.
   function renderConn(state) {
     const chip = $('#conn-chip');
     const label = $('#conn-label');
     const sync  = $('#conn-sync');
     chip.classList.remove('ok', 'stale', 'off');
 
-    let labelText, isLiveSource = false;
-    if (source instanceof SerialSource) {
-      labelText = 'Connected (Serial)'; isLiveSource = true;
-    } else if (source instanceof AdafruitIOSource) {
-      labelText = 'Connected (Adafruit IO)'; isLiveSource = true;
-    } else {
-      labelText = 'Demo (mock)';
-    }
+    const isBackend = source instanceof BackendSource;
+    const isSerial  = source instanceof SerialSource;
+
+    let labelText;
+    if (isSerial)       labelText = 'Connected (Serial)';
+    else if (isBackend) labelText = 'Connected (Adafruit IO)';
+    else                labelText = 'Demo (mock)';
 
     if (state.stale) {
       chip.classList.add('stale'); label.textContent = 'Stale data';
@@ -487,20 +486,33 @@
       label.textContent = labelText;
     } else {
       chip.classList.add('off');
-      label.textContent = (source instanceof AdafruitIOSource)
-        ? 'AIO not connected' : 'Disconnected';
+      if (isBackend && source.isConfigured && !source.isConfigured()) {
+        label.textContent = 'Backend: no AIO creds';
+      } else if (isBackend) {
+        label.textContent = 'Backend offline';
+      } else {
+        label.textContent = 'Disconnected';
+      }
     }
 
-    // Last-sync subtext (from the source's own lastSyncMs).
+    // Last-sync subtext. Prefer the device timestamp when it's valid,
+    // otherwise fall back to "received Xs ago" so the chip is never
+    // empty just because the device clock isn't synced.
     if (sync) {
       const ms = (source.lastSyncMs && source.lastSyncMs()) || 0;
-      sync.textContent = ms ? `Last sync · ${fmtAgo(new Date(ms).toISOString())}` : '';
+      if (state.reading && state.reading.time_valid && state.reading.timestamp) {
+        sync.textContent = `Device · ${fmtAgo(state.reading.timestamp)}`;
+      } else if (ms) {
+        sync.textContent = `Received · ${fmtAgo(new Date(ms).toISOString())}`;
+      } else {
+        sync.textContent = '';
+      }
     }
 
-    // Demo banner only shows in live tabs while running on mock data.
+    // Demo banner only shows on live tabs while running on mock data.
     const banner = $('#demo-banner');
     const onTestMode = $('#panel-test-mode').classList.contains('active');
-    const isMock = !(source instanceof SerialSource || source instanceof AdafruitIOSource);
+    const isMock = !(isSerial || isBackend);
     if (isMock && !onTestMode) banner.classList.remove('hidden');
     else banner.classList.add('hidden');
   }
@@ -532,33 +544,33 @@
         settings.data_source === 'serial' ? 'Click Connect to choose a port.' : 'Not connected';
     }
 
-    // Adafruit IO group: visible when source = adafruit
-    const aioCfg = $('#aio-config');
-    if (aioCfg) aioCfg.hidden = settings.data_source !== 'adafruit';
-    $('#aio-username').value = settings.aio_username || '';
-    $('#aio-key').value = settings.aio_key || '';
-    const f = settings.aio_feeds || {};
-    $('#aio-feed-moisture').value    = f.moisture      || '';
-    $('#aio-feed-temperature').value = f.temperature   || '';
-    $('#aio-feed-humidity').value    = f.humidity      || '';
-    $('#aio-feed-light').value       = f.light         || '';
-    $('#aio-feed-reservoir').value   = f.reservoir     || '';
-    $('#aio-feed-pump').value        = f.pump_status   || '';
-    $('#aio-feed-cmd').value         = f.water_command || '';
-    $('#aio-feed-herb').value        = f.selected_herb || '';
-    if (source instanceof AdafruitIOSource) {
-      const hint = $('#aio-status-hint');
-      hint.className = 'hint ' + (source.isConnected() ? 'aio-status-ok' : 'aio-status-error');
-      if (source.isConnected()) {
-        const t = source.lastSyncMs && source.lastSyncMs();
-        hint.textContent = t ? `Connected — last sync ${fmtAgo(new Date(t).toISOString())}` : 'Connected';
-      } else {
-        hint.textContent = source.lastError ? (source.lastError() || 'Waiting for first sync…') : 'Not connected';
+    // Backend group: visible when source = backend
+    const backendCfg = $('#backend-config');
+    if (backendCfg) backendCfg.hidden = settings.data_source !== 'backend';
+    $('#backend-url').value = settings.backend_url || '';
+    $('#backend-poll').value = settings.backend_poll_interval_s || 10;
+    const backendHint = $('#backend-status-hint');
+    if (backendHint) {
+      backendHint.className = 'hint';
+      if (source instanceof BackendSource) {
+        if (source.isConnected()) {
+          const t = source.lastSyncMs && source.lastSyncMs();
+          backendHint.classList.add('aio-status-ok');
+          backendHint.textContent = t
+            ? `Connected — last sync ${fmtAgo(new Date(t).toISOString())}`
+            : 'Connected';
+        } else if (source.isConfigured && !source.isConfigured()) {
+          backendHint.classList.add('aio-status-error');
+          backendHint.textContent = 'Backend running but missing AIO_USERNAME / AIO_KEY in backend/.env';
+        } else {
+          backendHint.classList.add('aio-status-error');
+          backendHint.textContent = source.lastError
+            ? `Backend unreachable: ${source.lastError() || 'unknown error'}`
+            : 'Waiting for first sync…';
+        }
+      } else if (settings.data_source === 'backend') {
+        backendHint.textContent = 'Switch to Backend then click Test to verify the connection.';
       }
-    } else if (settings.data_source === 'adafruit') {
-      const hint = $('#aio-status-hint');
-      hint.className = 'hint';
-      hint.textContent = 'Save the settings, then click Test connection.';
     }
 
     // Garden: herb dropdown + planted date
@@ -681,41 +693,27 @@
     }
   });
 
-  // Adafruit IO field bindings
-  function bindAioField(id, key) {
-    $(id).addEventListener('change', (e) => {
-      settings = S.saveSettings({ [key]: e.target.value.trim() });
-    });
-  }
-  bindAioField('#aio-username', 'aio_username');
-  bindAioField('#aio-key',      'aio_key');
-
-  function bindAioFeed(id, feedKey) {
-    $(id).addEventListener('change', (e) => {
-      const feeds = { ...(settings.aio_feeds || {}), [feedKey]: e.target.value.trim() };
-      settings = S.saveSettings({ aio_feeds: feeds });
-    });
-  }
-  bindAioFeed('#aio-feed-moisture',    'moisture');
-  bindAioFeed('#aio-feed-temperature', 'temperature');
-  bindAioFeed('#aio-feed-humidity',    'humidity');
-  bindAioFeed('#aio-feed-light',       'light');
-  bindAioFeed('#aio-feed-reservoir',   'reservoir');
-  bindAioFeed('#aio-feed-pump',        'pump_status');
-  bindAioFeed('#aio-feed-cmd',         'water_command');
-  bindAioFeed('#aio-feed-herb',        'selected_herb');
-
-  $('#test-aio').addEventListener('click', async () => {
-    settings = S.saveSettings({ data_source: 'adafruit' });
-    rebuildSource();
+  // Backend (local Flask proxy) field bindings. Credentials are NOT
+  // entered here — they live in backend/.env on the host running Flask.
+  $('#backend-url').addEventListener('change', (e) => {
+    settings = S.saveSettings({ backend_url: e.target.value.trim() });
+    if (settings.data_source === 'backend') rebuildSource();
     renderSettings();
-    // Force an immediate poll attempt and then re-render the status.
-    if (source instanceof AdafruitIOSource) {
-      const hint = $('#aio-status-hint');
-      hint.className = 'hint'; hint.textContent = 'Connecting…';
-      // give the immediate _pollOnce() inside start() a moment to complete
-      setTimeout(() => { renderSettings(); render(); }, 800);
-    }
+  });
+  $('#backend-poll').addEventListener('change', (e) => {
+    const v = Math.max(5, Math.min(60, Number(e.target.value) || 10));
+    settings = S.saveSettings({ backend_poll_interval_s: v });
+    if (settings.data_source === 'backend') rebuildSource();
+    renderSettings();
+  });
+
+  $('#test-backend').addEventListener('click', async () => {
+    settings = S.saveSettings({ data_source: 'backend' });
+    rebuildSource();
+    const hint = $('#backend-status-hint');
+    hint.className = 'hint';
+    hint.textContent = 'Pinging backend…';
+    setTimeout(() => { renderSettings(); render(); }, 800);
   });
 
   // Herb dropdown in Settings
