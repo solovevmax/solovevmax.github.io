@@ -1,9 +1,9 @@
 /* localStorage helpers for Sprout and Spoon: settings, event log,
- * test mode state, planted dates, plant source, and per-recipe
- * shopping list check-state. Namespaced under "sproutandspoon.*".
+ * planted dates, plant source, and per-recipe shopping list check-state.
+ * Namespaced under "sproutandspoon.*".
  *
- * Adafruit IO credentials are NOT stored here — they live server-side
- * in backend/.env so the AIO key never reaches the browser.
+ * Adafruit IO username + key are entered by the user in Settings and
+ * persist here. They are stored only locally in the browser.
  */
 (function (root) {
 
@@ -11,10 +11,20 @@
     settings:     'sproutandspoon.settings.v1',
     events:       'sproutandspoon.events.v1',
     waterTs:      'sproutandspoon.lastWaterTs.v1',
-    testMode:     'sproutandspoon.testMode.v1',
     planted:      'sproutandspoon.plantedDates.v1',
     plantSources: 'sproutandspoon.plantSources.v1',
     shopping:     'sproutandspoon.shopping.v1',
+  };
+
+  const DEFAULT_AIO_FEEDS = {
+    moisture:        'soil-moisture',
+    temperature:     'temperature',
+    humidity:        'humidity',
+    light:           'light-level',
+    reservoir:       'water-reservoir',
+    pump_status:     'pump-status',
+    water_command:   'water-command',
+    selected_herb:   'selected-herb',
   };
 
   const DEFAULTS = {
@@ -24,16 +34,12 @@
     low_reservoir_pct: 20,
     stale_after_s: 30,
     notifications_enabled: true,
-    // Primary live channel is the local backend that proxies Adafruit IO.
-    // Browser never sees the AIO key.
-    data_source: 'backend',          // 'backend' | 'mock' | 'serial'
-    backend_url: '',                 // '' = same origin
-    backend_poll_interval_s: 10,
+    data_source: 'mock',                  // 'mock' | 'adafruit' | 'serial'
+    aio_username: '',
+    aio_key: '',
+    aio_feeds: { ...DEFAULT_AIO_FEEDS },
+    aio_poll_interval_s: 10,
   };
-
-  // Field names that should NEVER appear in this app's localStorage going
-  // forward (they used to hold the AIO key in cleartext). Wiped on load.
-  const LEGACY_CREDENTIAL_FIELDS = ['aio_username', 'aio_key', 'aio_feeds'];
 
   function readJSON(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -45,17 +51,13 @@
 
   function loadSettings() {
     const stored = readJSON(KEYS.settings, {});
-    // Migrate the old 'adafruit' value (which used direct AIO from the
-    // browser) to the new backend-proxied source.
-    if (stored.data_source === 'adafruit') stored.data_source = 'backend';
-    // Purge legacy credentials from prior versions of this app.
-    let purged = false;
-    for (const f of LEGACY_CREDENTIAL_FIELDS) {
-      if (f in stored) { delete stored[f]; purged = true; }
-    }
-    const merged = { ...DEFAULTS, ...stored };
-    if (purged) writeJSON(KEYS.settings, merged);
-    return merged;
+    // Migrate the short-lived 'backend' source value back to 'adafruit'.
+    if (stored.data_source === 'backend') stored.data_source = 'adafruit';
+    return {
+      ...DEFAULTS,
+      ...stored,
+      aio_feeds: { ...DEFAULT_AIO_FEEDS, ...(stored.aio_feeds || {}) },
+    };
   }
   function saveSettings(patch) {
     const next = { ...loadSettings(), ...patch };
@@ -82,9 +84,6 @@
     for (let i = ev.length - 1; i >= 0; i--) if (ev[i].kind === kind) return ev[i];
     return null;
   }
-
-  function loadTestMode() { return readJSON(KEYS.testMode, null); }
-  function saveTestMode(state) { writeJSON(KEYS.testMode, state); }
 
   function loadLastWaterTs() {
     const v = Number(localStorage.getItem(KEYS.waterTs));
@@ -148,10 +147,9 @@
   }
 
   root.HerbStorage = {
-    DEFAULTS,
+    DEFAULTS, DEFAULT_AIO_FEEDS,
     loadSettings, saveSettings,
     loadEvents, addEvent, addEventAt, clearEvents, setEvents, lastOf,
-    loadTestMode, saveTestMode,
     loadLastWaterTs, saveLastWaterTs,
     loadPlantedDates, loadPlantedDate, savePlantedDate, ensurePlantedDate,
     loadPlantSources, loadPlantSource, savePlantSource, ensurePlantSource,

@@ -1172,3 +1172,204 @@ button { font: inherit; cursor: pointer; }
   .plant-source-toggle { width: 100%; justify-content: center; }
   .plant-source-toggle .ps-opt { flex: 1; justify-content: center; }
 }
+
+/* ============================================================
+   Day / night grow cycle
+   Banner sits at the top of Home and the night mode swaps the
+   palette to a near-black surface with a brighter lime accent.
+   ============================================================ */
+
+.cycle-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 16px;
+}
+.cycle-icon {
+  width: 40px; height: 40px;
+  display: grid; place-items: center;
+  background: var(--lime-soft);
+  color: var(--lime-deep);
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.cycle-icon svg { width: 22px; height: 22px; }
+.cycle-banner[data-cycle="night"] .cycle-icon {
+  background: var(--ink);
+  color: var(--lime);
+}
+.cycle-body { flex: 1; min-width: 0; }
+.cycle-time {
+  font-family: var(--display); font-weight: 500;
+  font-size: 22px; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.cycle-mode {
+  margin-top: 2px;
+  font-size: 12px; color: var(--muted);
+  letter-spacing: .01em;
+}
+.cycle-targets {
+  font-size: 11.5px; color: var(--muted);
+  text-align: right; line-height: 1.45;
+  max-width: 46%;
+}
+@media (max-width: 540px) {
+  /* Stack the targets under the time on narrow screens. */
+  .cycle-banner { flex-wrap: wrap; }
+  .cycle-targets {
+    flex-basis: 100%;
+    width: 100%;
+    max-width: 100%;
+    text-align: left;
+    padding-top: 4px;
+    margin-left: 54px;   /* line up under the body, not the icon */
+  }
+}
+
+/* Harvest-ready badge inside the hero card, shown only when the user
+   has marked the herb as shop-bought / mature in Settings. */
+.harvest-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--ink);
+  font-size: 12.5px; font-weight: 600;
+  line-height: 1.2;
+}
+.harvest-badge[hidden] { display: none; }
+.harvest-badge svg { stroke: var(--ink); }
+
+/* AIO feeds disclosure (under Settings → Connection). */
+.aio-feeds-group {
+  margin: 6px 0 4px;
+  padding: 0;
+}
+.aio-feeds-group > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px; font-weight: 600;
+  color: var(--muted);
+  padding: 8px 0;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.aio-feeds-group > summary::-webkit-details-marker { display: none; }
+.aio-feeds-group > summary::after {
+  content: "▾";
+  margin-left: 6px;
+  font-size: 10px;
+}
+.aio-feeds-group[open] > summary::after { content: "▴"; }
+
+/* ============================================================
+   Night mode — applied to <body> by app.js when the cycle flips.
+   The palette swaps to near-black surfaces with a brighter lime
+   accent. The lime brand colour itself stays the same so the
+   logo and primary actions read with the same hue.
+   ============================================================ */
+
+body.night-mode {
+  --bg:           #0D0E0B;
+  --bg-tint:      #14150F;
+  --card:         #1A1B17;
+  --card-soft:    #1F2017;
+  --ink:          #F4F5EE;
+  --ink-2:        #C8C9BC;
+  --muted:        #7E807A;
+  --hairline:     #2A2C24;
+
+  --lime-soft:    #2C351A;
+  --lime-tint:    #1F2613;
+  --lime-deep:    #B5DA42;
+
+  --warn-soft:    #3A2D11;
+  --bad-soft:     #3A1E1E;
+
+  /* Drop the daytime corner glow; pure dark surface reads cleaner. */
+  background-image: none;
+}
+
+/* Brand mark: in night mode the logo container flips so the lime
+   sprout sits on a dark surface that matches the dark cards. */
+body.night-mode .brand .logo {
+  background: var(--card);
+  color: var(--lime);
+  border: 1px solid var(--hairline);
+}
+
+/* The sticky top-bar gradient is keyed to the light bg; in dark mode
+   we just want a flat dark surface, no fade. */
+body.night-mode .topbar {
+  background: linear-gradient(to bottom, var(--bg) 70%, rgba(13,14,11,0));
+}
+
+/* Hero card and gauge readouts still want a soft surface against the
+   dark background. Lighten the soft tone slightly so the basil card
+   still reads as a distinct surface. */
+body.night-mode .hero { background: var(--card-soft); }
+body.night-mode .hero::before {
+  background: linear-gradient(90deg, transparent, var(--lime), transparent);
+  opacity: .6;
+}
+
+/* Primary buttons in dark mode look better with the lime fill — black
+   on black is unusable. */
+body.night-mode .btn {
+  background: var(--lime);
+  color: #0D0E0B;
+}
+body.night-mode .btn:hover { background: #B7D63D; }
+body.night-mode .btn.ghost {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+body.night-mode .btn.ghost:hover { background: var(--bg-tint); }
+body.night-mode .btn:disabled { background: #2C2E26; color: #6C6E66; }
+
+/* Active tab pill */
+body.night-mode .tab.active { background: var(--lime); color: #0D0E0B; }
+
+/* Pump status colours in dark mode */
+body.night-mode .pump-status-line .ps-running,
+body.night-mode .pump-status-line .ps-completed { color: var(--lime); }
+
+/* Demo banner — switch to a darker amber on dark surface. */
+body.night-mode .banner {
+  background: #2C2310;
+  color: #E8C079;
+  border-color: #4A3A18;
+}
+body.night-mode .banner .pill { background: #E8C079; color: #2C2310; }
+
+/* Connection chip */
+body.night-mode .conn-chip {
+  background: var(--card);
+  border-color: var(--hairline);
+  color: var(--ink);
+}
+
+/* Cycle banner — make the icon read clearly on dark. */
+body.night-mode .cycle-banner[data-cycle="night"] .cycle-icon {
+  background: var(--lime);
+  color: #0D0E0B;
+}
+
+/* Light tag pill colours on Live data card */
+body.night-mode .metric-tag.ml-medium { background: #3A2D11; color: #E8C079; }
+body.night-mode .metric-tag.ml-bright { background: var(--lime); color: #0D0E0B; }
+
+/* Range indicator dot needs to be visible on dark. */
+body.night-mode .metric-card .range-strip > .indicator { background: var(--ink); }
+
+/* Watering-feedback success colour reads better as bright lime on dark. */
+body.night-mode .water-feedback.ok { color: var(--lime); }

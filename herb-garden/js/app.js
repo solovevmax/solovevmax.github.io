@@ -1,41 +1,47 @@
 /* Sprout and Spoon — main app:
  * - Live-mode controller (auto-water, alerts). The primary live channel is
- *   the local Flask backend (BackendSource), which owns the Adafruit IO
- *   key. Demo and Serial are fallback / debug options.
+ *   Adafruit IO REST (AdafruitIOSource) polled directly from the browser
+ *   with credentials the user enters in Settings. Demo mock and USB serial
+ *   are the fallback / debug options.
  * - UI rendering for Home, Live, History, Plant Profile, Settings, Alerts,
- *   Test Mode, Recipes, and the Shopping List sub-view.
+ *   Recipes, and the Shopping List sub-view.
+ * - Day/night grow cycle (js/cycle.js) shifts plant targets and auto-water
+ *   parameters based on local time, and swaps the UI into a dark theme at
+ *   night.
  * - Multi-herb gating: only Basil triggers live actions (auto-water, pump
  *   commands, event log). Other herbs are info-only reference profiles.
  */
 (function () {
-  const { PLANTS, SCENARIOS, ILLUSTRATIONS, getPlant, listPlants } = window.HerbPlants;
+  const { PLANTS, ILLUSTRATIONS, getPlant, listPlants } = window.HerbPlants;
   const { computeHealth, bucket } = window.HerbHealth;
-  const { LiveMockSource, SerialSource, BackendSource } = window.HerbSources;
+  const { LiveMockSource, SerialSource, AdafruitIOSource } = window.HerbSources;
   const { RECIPES, recipeOfTheDay, growthStage } = window.SproutRecipes;
   const { currentSeason, herbSuitability } = window.SproutSeasonality;
+  const Cycle = window.SproutCycle;
   const S = window.HerbStorage;
 
   const $ = (sel) => document.querySelector(sel);
 
   // --- Static metric metadata used in rendering ----------------------------
   // `description` is shown as helper copy on each metric card in the Live
-  // data tab so the user understands what the number really represents.
+  // data tab. The tone is deliberately statement-style: it tells the user
+  // how the value is produced, not how to read the number.
   const METRICS = [
     { key: 'moisture_pct',    name: 'Soil moisture', unit: '%',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>',
-      description: 'Calibrated percentage derived from the raw analog sensor reading, mapped between the configured dry-air and fully-wet calibration points. Higher % = wetter soil; lower % = drier soil. This is a relative value tuned to this setup — not an absolute laboratory soil-water-content measurement.' },
+      description: 'Soil moisture is sampled as a raw analog voltage from the capacitive probe, mapped onto a 0–100% scale between the dry-air and fully-wet calibration points, and averaged across the most recent samples. The figure is relative to this setup, not a lab-grade soil-water-content measurement.' },
     { key: 'temperature_c',   name: 'Temperature',   unit: '°C',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 0 0-4 0v9.5a4 4 0 1 0 4 0z"/></svg>',
-      description: 'Live air temperature in degrees Celsius, measured by the DHT sensor next to the plant. Higher numbers mean warmer ambient conditions around the plant.' },
+      description: 'Temperature is read directly from the DHT sensor in degrees Celsius and reported as the latest ambient air measurement next to the plant.' },
     { key: 'humidity_pct',    name: 'Humidity',      unit: '%',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15a4 4 0 0 0 4 4 5 5 0 0 0 5-3 5 5 0 0 0 5 3 4 4 0 0 0 4-4c0-3-4-6-9-12-5 6-9 9-9 12z"/></svg>',
-      description: 'Relative humidity (%) from the DHT sensor. Relative humidity describes how much water vapour is in the air compared to how much the air could hold at this temperature. Higher % = moister air; lower % = drier air.' },
+      description: 'Humidity is reported by the DHT sensor as relative humidity — the ratio of water vapour in the air to the saturation point at the current temperature, expressed as a percentage and averaged across recent samples.' },
     { key: 'light_lux',       name: 'Light',         unit: ' lx',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M4.5 19.5l2-2M17.5 6.5l2-2"/></svg>',
-      description: 'The BH1750 reports illuminance directly in lux — the value above is the sensor reading, not a rescaled estimate. The dim / medium / bright label on Home is just an interpretation layer (dim < 100 lx, medium 100–499 lx, bright ≥ 500 lx).' },
+      description: 'Light is reported by the BH1750 directly in lux. The dim / medium / bright label is applied here in the app as a friendlier readout — the underlying value is the raw sensor measurement, not a rescaled estimate.' },
     { key: 'reservoir_level', name: 'Reservoir',     unit: '%',
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v6a7 7 0 0 1-14 0z"/><path d="M5 14h14"/></svg>',
-      description: 'Estimated water-tank fill level, 0–100%. The firmware now corrects the previously-inverted mapping, so 0% is empty and 100% is full.' },
+      description: 'Reservoir level is read from the analog probe and converted to a 0–100% fill scale with the firmware\'s corrected mapping: 0% is empty, 100% is full.' },
   ];
 
   // Map a lux reading to the user-facing interpretation label.
@@ -68,20 +74,45 @@
   let source = null;
   let alertActive = { low_res: false, stale: false, off: false };
 
+  // Day/night grow cycle state. Recomputed once a minute. _activePlant
+  // is the plant object with cycle-adjusted ranges, _activeSettings has
+  // cycle-adjusted auto-water parameters. Live code paths use these
+  // instead of the canonical `plant` / `settings`.
+  let _activeCycle    = Cycle.currentCycle();
+  let _activePlant    = { ...plant, ranges: Cycle.adjustedRanges(plant, _activeCycle) };
+  let _activeSettings = Cycle.adjustedWateringParams(settings, _activeCycle);
+
+  function refreshCycle() {
+    _activeCycle = Cycle.currentCycle();
+    _activePlant = { ...plant, ranges: Cycle.adjustedRanges(plant, _activeCycle) };
+    _activeSettings = Cycle.adjustedWateringParams(settings, _activeCycle);
+    document.body.classList.toggle('night-mode', _activeCycle === 'night');
+  }
+  refreshCycle();
+  // Re-evaluate the cycle every minute so the UI flips to/from night mode
+  // and the live targets shift without a page reload.
+  setInterval(refreshCycle, 60_000);
+
   function makeSource() {
     try {
       if (settings.data_source === 'serial' && SerialSource.isSupported()) {
         return new SerialSource(settings.stale_after_s * 1000);
       }
-      if (settings.data_source === 'mock') {
-        return new LiveMockSource();
+      if (settings.data_source === 'adafruit') {
+        const src = new AdafruitIOSource({
+          username: settings.aio_username,
+          key:      settings.aio_key,
+          feeds:    settings.aio_feeds,
+          pollIntervalMs: (settings.aio_poll_interval_s || 10) * 1000,
+          staleAfterMs:   (settings.stale_after_s        || 30) * 1000,
+        });
+        if (!src.isConfigured()) {
+          // No credentials yet — show mock data so the UI isn't blank.
+          return new LiveMockSource();
+        }
+        return src;
       }
-      // Default: backend-proxied Adafruit IO. The browser never sees the key.
-      return new BackendSource({
-        baseUrl: settings.backend_url || '',
-        pollIntervalMs: (settings.backend_poll_interval_s || 10) * 1000,
-        staleAfterMs: (settings.stale_after_s || 30) * 1000,
-      });
+      return new LiveMockSource();
     } catch (e) {
       // Any source construction failure → graceful demo fallback.
       try { S.addEvent('alert', 'Data source failed to start: ' + (e.message || e)); } catch (_) {}
@@ -112,15 +143,16 @@
       } else { alertActive.low_res = false; }
 
       // Auto-water — only runs for the live-wired herb (basil) and never
-      // for reference-only herbs (parsley/thyme/mint).
+      // for reference-only herbs (parsley/thyme/mint). Threshold and
+      // cooldown shift with the day/night cycle (see js/cycle.js).
       const lastTs = S.loadLastWaterTs();
-      const cooldownOk = (now - lastTs) > settings.watering_cooldown_s * 1000;
+      const cooldownOk = (now - lastTs) > _activeSettings.watering_cooldown_s * 1000;
       const haveWater = r.reservoir_level == null || r.reservoir_level >= settings.low_reservoir_pct;
       const liveWired = plant.live === true;
       if (liveWired
           && source.allowAutoWater !== false
           && r.moisture_pct != null
-          && r.moisture_pct < settings.moisture_threshold_pct
+          && r.moisture_pct < _activeSettings.moisture_threshold_pct
           && cooldownOk
           && haveWater) {
         // Fire-and-forget; the in-flight lock inside triggerWatering
@@ -292,7 +324,9 @@
     $('#key-metrics').innerHTML = keys.map(k => {
       const def = METRICS.find(m => m.key === k);
       const v = r[k];
-      const b = bucket(plant, k, v);
+      // Use the cycle-adjusted plant so the colour buckets honour the
+      // current day/night targets (low light is "good" at night).
+      const b = bucket(_activePlant, k, v);
       const cls = b === 'missing' ? '' : (b === 'good' ? '' : ' ' + b);
       const formatted = fmtVal(k, v);
       return `<div class="chip${cls}">
@@ -312,6 +346,34 @@
       waterBtn.disabled = !plant.live;
       waterBtn.title = plant.live ? '' : `Switch to Basil in Settings to water the live garden.`;
     }
+
+    // Cycle banner — local time + day/night icon + active targets.
+    renderCycleBanner();
+
+    // Harvest-ready badge: only when the user marked this herb as
+    // "shop-bought / mature" in Settings. Otherwise it stays hidden.
+    const harvestBadge = $('#harvest-badge');
+    if (harvestBadge) {
+      const ps = S.ensurePlantSource(plant.id);
+      harvestBadge.hidden = ps !== 'mature';
+    }
+  }
+
+  // Render the day/night cycle banner on Home: clock, icon, mode label
+  // and a short summary of the active targets. Called from renderHome and
+  // also on a 1 s clock tick so the time stays current without redrawing
+  // the whole panel.
+  function renderCycleBanner() {
+    const banner = $('#cycle-banner');
+    if (!banner) return;
+    const now = new Date();
+    const bucket = Cycle.timeOfDayBucket(now);
+    banner.dataset.cycle = _activeCycle;     // 'day' | 'night' — used by CSS
+    banner.dataset.bucket = bucket;
+    $('#cycle-icon').innerHTML = Cycle.ICONS[bucket] || Cycle.ICONS.midday;
+    $('#cycle-time').textContent = Cycle.timeOfDayLabel(now);
+    $('#cycle-mode').textContent = Cycle.bucketLabel(bucket);
+    $('#cycle-targets').textContent = Cycle.targetsSummary(plant, _activeCycle);
   }
 
   function subscoresHint(subs) {
@@ -340,10 +402,11 @@
           : (v < settings.low_reservoir_pct ? 'bad'
           : v < settings.low_reservoir_pct + 15 ? 'warn' : 'good');
       } else {
-        b = bucket(plant, def.key, v);
+        // _activePlant.ranges = cycle-adjusted targets (night drops light/temp).
+        b = bucket(_activePlant, def.key, v);
       }
       const cls = b === 'missing' ? 'missing' : (b === 'good' ? '' : b);
-      const rng = plant.ranges[def.key];
+      const rng = _activePlant.ranges[def.key];
       const idealTxt = rng ? `Ideal ${rng.ideal[0]}–${rng.ideal[1]}${def.unit}` :
                        (def.key === 'reservoir_level' ? `Keep above ${settings.low_reservoir_pct}%` : '');
       // Indicator: position the marker along the chip's range bar
@@ -534,24 +597,24 @@
     renderSettings();
   }
 
-  // Connection chip + demo banner.
-  // Labels reflect the active source type:
-  //   Backend (Adafruit IO) / Serial / Demo / Stale / Disconnected /
-  //   "Backend: no AIO creds" when the backend is reachable but the
-  //   AIO env vars haven't been set.
+  // Connection chip + demo banner. Labels reflect the active source:
+  //   Connected (Adafruit IO) / Connected (Serial) / Demo (mock) /
+  //   Stale data / Disconnected. When the user has picked Adafruit IO
+  //   but hasn't entered credentials yet the source falls back to mock,
+  //   so the chip reads "Demo (mock)" until the creds are saved.
   function renderConn(state) {
     const chip = $('#conn-chip');
     const label = $('#conn-label');
     const sync  = $('#conn-sync');
     chip.classList.remove('ok', 'stale', 'off');
 
-    const isBackend = source instanceof BackendSource;
-    const isSerial  = source instanceof SerialSource;
+    const isAio    = source instanceof AdafruitIOSource;
+    const isSerial = source instanceof SerialSource;
 
     let labelText;
-    if (isSerial)       labelText = 'Connected (Serial)';
-    else if (isBackend) labelText = 'Connected (Adafruit IO)';
-    else                labelText = 'Demo (mock)';
+    if (isSerial)   labelText = 'Connected (Serial)';
+    else if (isAio) labelText = 'Connected (Adafruit IO)';
+    else            labelText = 'Demo (mock)';
 
     if (state.stale) {
       chip.classList.add('stale'); label.textContent = 'Stale data';
@@ -560,18 +623,11 @@
       label.textContent = labelText;
     } else {
       chip.classList.add('off');
-      if (isBackend && source.isConfigured && !source.isConfigured()) {
-        label.textContent = 'Backend: no AIO creds';
-      } else if (isBackend) {
-        label.textContent = 'Backend offline';
-      } else {
-        label.textContent = 'Disconnected';
-      }
+      label.textContent = isAio ? 'AIO not connected' : 'Disconnected';
     }
 
     // Last-sync subtext. Prefer the device timestamp when it's valid,
-    // otherwise fall back to "received Xs ago" so the chip is never
-    // empty just because the device clock isn't synced.
+    // otherwise fall back to receipt time so the chip is never empty.
     if (sync) {
       const ms = (source.lastSyncMs && source.lastSyncMs()) || 0;
       if (state.reading && state.reading.time_valid && state.reading.timestamp) {
@@ -585,9 +641,8 @@
 
     // Demo banner only shows on live tabs while running on mock data.
     const banner = $('#demo-banner');
-    const onTestMode = $('#panel-test-mode').classList.contains('active');
-    const isMock = !(isSerial || isBackend);
-    if (isMock && !onTestMode) banner.classList.remove('hidden');
+    const isMock = !(isSerial || isAio);
+    if (isMock) banner.classList.remove('hidden');
     else banner.classList.add('hidden');
   }
 
@@ -618,32 +673,41 @@
         settings.data_source === 'serial' ? 'Click Connect to choose a port.' : 'Not connected';
     }
 
-    // Backend group: visible when source = backend
-    const backendCfg = $('#backend-config');
-    if (backendCfg) backendCfg.hidden = settings.data_source !== 'backend';
-    $('#backend-url').value = settings.backend_url || '';
-    $('#backend-poll').value = settings.backend_poll_interval_s || 10;
-    const backendHint = $('#backend-status-hint');
-    if (backendHint) {
-      backendHint.className = 'hint';
-      if (source instanceof BackendSource) {
+    // Adafruit IO group: visible when source = adafruit
+    const aioCfg = $('#aio-config');
+    if (aioCfg) aioCfg.hidden = settings.data_source !== 'adafruit';
+    $('#aio-username').value = settings.aio_username || '';
+    $('#aio-key').value      = settings.aio_key      || '';
+    $('#aio-poll').value     = settings.aio_poll_interval_s || 10;
+    const f = settings.aio_feeds || {};
+    $('#aio-feed-moisture').value    = f.moisture      || '';
+    $('#aio-feed-temperature').value = f.temperature   || '';
+    $('#aio-feed-humidity').value    = f.humidity      || '';
+    $('#aio-feed-light').value       = f.light         || '';
+    $('#aio-feed-reservoir').value   = f.reservoir     || '';
+    $('#aio-feed-pump').value        = f.pump_status   || '';
+    $('#aio-feed-cmd').value         = f.water_command || '';
+    $('#aio-feed-herb').value        = f.selected_herb || '';
+    const aioHint = $('#aio-status-hint');
+    if (aioHint) {
+      aioHint.className = 'hint';
+      if (source instanceof AdafruitIOSource) {
         if (source.isConnected()) {
           const t = source.lastSyncMs && source.lastSyncMs();
-          backendHint.classList.add('aio-status-ok');
-          backendHint.textContent = t
+          aioHint.classList.add('aio-status-ok');
+          aioHint.textContent = t
             ? `Connected — last sync ${fmtAgo(new Date(t).toISOString())}`
             : 'Connected';
-        } else if (source.isConfigured && !source.isConfigured()) {
-          backendHint.classList.add('aio-status-error');
-          backendHint.textContent = 'Backend running but missing AIO_USERNAME / AIO_KEY in backend/.env';
         } else {
-          backendHint.classList.add('aio-status-error');
-          backendHint.textContent = source.lastError
-            ? `Backend unreachable: ${source.lastError() || 'unknown error'}`
+          aioHint.classList.add('aio-status-error');
+          aioHint.textContent = source.lastError
+            ? `Not connected: ${source.lastError() || 'unknown error'}`
             : 'Waiting for first sync…';
         }
-      } else if (settings.data_source === 'backend') {
-        backendHint.textContent = 'Switch to Backend then click Test to verify the connection.';
+      } else if (settings.data_source === 'adafruit') {
+        aioHint.textContent = 'Enter your username + key, then Save and Test.';
+      } else {
+        aioHint.textContent = 'Switch source to Adafruit IO to enable.';
       }
     }
 
@@ -677,7 +741,9 @@
   // Master render
   function render() {
     const r = source.getLatest();
-    const health = computeHealth(plant, r);
+    // Health scoring uses the cycle-adjusted plant so night-time low light
+    // doesn't drag the score down.
+    const health = computeHealth(_activePlant, r);
     const lastWatered = S.lastOf('watering');
     const state = {
       reading: r, health, lastWatered,
@@ -705,7 +771,6 @@
       if (t === 'settings') renderSettings();
       if (t === 'live') render();
       if (t === 'recipes') renderRecipes();
-      if (t === 'test-mode') renderTestMode();
       // Shopping is a sub-view of Recipes; never reached via tab.
       // Re-render conn so the demo banner shows/hides per tab
       const r = source.getLatest();
@@ -808,27 +873,47 @@
     }
   });
 
-  // Backend (local Flask proxy) field bindings. Credentials are NOT
-  // entered here — they live in backend/.env on the host running Flask.
-  $('#backend-url').addEventListener('change', (e) => {
-    settings = S.saveSettings({ backend_url: e.target.value.trim() });
-    if (settings.data_source === 'backend') rebuildSource();
-    renderSettings();
-  });
-  $('#backend-poll').addEventListener('change', (e) => {
-    const v = Math.max(5, Math.min(60, Number(e.target.value) || 10));
-    settings = S.saveSettings({ backend_poll_interval_s: v });
-    if (settings.data_source === 'backend') rebuildSource();
+  // Adafruit IO credential + feed bindings. Username and key are held in
+  // localStorage only — no cloud sync, never leaves the browser.
+  function bindAioField(id, key) {
+    $(id).addEventListener('change', (e) => {
+      settings = S.saveSettings({ [key]: e.target.value.trim() });
+      if (settings.data_source === 'adafruit') rebuildSource();
+    });
+  }
+  bindAioField('#aio-username', 'aio_username');
+  bindAioField('#aio-key',      'aio_key');
+
+  $('#aio-poll').addEventListener('change', (e) => {
+    const v = Math.max(5, Math.min(30, Number(e.target.value) || 10));
+    settings = S.saveSettings({ aio_poll_interval_s: v });
+    if (settings.data_source === 'adafruit') rebuildSource();
     renderSettings();
   });
 
-  $('#test-backend').addEventListener('click', async () => {
-    settings = S.saveSettings({ data_source: 'backend' });
+  function bindAioFeed(id, feedKey) {
+    $(id).addEventListener('change', (e) => {
+      const feeds = { ...(settings.aio_feeds || {}), [feedKey]: e.target.value.trim() };
+      settings = S.saveSettings({ aio_feeds: feeds });
+      if (settings.data_source === 'adafruit') rebuildSource();
+    });
+  }
+  bindAioFeed('#aio-feed-moisture',    'moisture');
+  bindAioFeed('#aio-feed-temperature', 'temperature');
+  bindAioFeed('#aio-feed-humidity',    'humidity');
+  bindAioFeed('#aio-feed-light',       'light');
+  bindAioFeed('#aio-feed-reservoir',   'reservoir');
+  bindAioFeed('#aio-feed-pump',        'pump_status');
+  bindAioFeed('#aio-feed-cmd',         'water_command');
+  bindAioFeed('#aio-feed-herb',        'selected_herb');
+
+  $('#test-aio').addEventListener('click', async () => {
+    settings = S.saveSettings({ data_source: 'adafruit' });
     rebuildSource();
-    const hint = $('#backend-status-hint');
+    const hint = $('#aio-status-hint');
     hint.className = 'hint';
-    hint.textContent = 'Pinging backend…';
-    setTimeout(() => { renderSettings(); render(); }, 800);
+    hint.textContent = 'Connecting…';
+    setTimeout(() => { renderSettings(); render(); }, 1000);
   });
 
   // Herb dropdown in Settings
@@ -842,226 +927,21 @@
     renderRecipes();
   });
 
-  // Plant source segmented toggle (From seed / Shop-bought · mature)
+  // Plant source segmented toggle (From seed / Shop-bought · mature).
+  // render() is called so the Home harvest badge updates immediately.
   document.querySelectorAll('#plant-source-toggle .ps-opt').forEach(opt => {
     opt.addEventListener('click', () => {
       const value = opt.dataset.value;
       S.savePlantSource(plant.id, value);
       renderSettings();
       renderRecipes();
+      render();
     });
   });
 
   // ------------------------------------------------------------------------
-  // TEST MODE — fully isolated manual sandbox. Does NOT touch the live data
-  // source, events log, or last-watered timestamp.
+  // (Test Mode tab was removed — diagnostics no longer needed.)
   // ------------------------------------------------------------------------
-  const TEST_DEFAULTS = {
-    moisture_pct: 58, temperature_c: 22.4, humidity_pct: 52,
-    light_lux: 22000, reservoir_level: 85,
-    last_watered_min_ago: 90,
-  };
-  // Strip any legacy pH fields a previous build may have written into
-  // localStorage so the test state matches the current schema.
-  let testState = S.loadTestMode() || { ...TEST_DEFAULTS };
-  delete testState.ph;
-  delete testState.ph_present;
-
-  function buildTestReading() {
-    return {
-      timestamp: new Date().toISOString(),
-      moisture_pct:    Number(testState.moisture_pct),
-      temperature_c:   Number(testState.temperature_c),
-      humidity_pct:    Number(testState.humidity_pct),
-      light_lux:       Number(testState.light_lux),
-      reservoir_level: Number(testState.reservoir_level),
-      pump_event: null,
-    };
-  }
-
-  function fmtMinAgo(min) {
-    if (min < 1) return 'just now';
-    if (min < 60) return `${Math.round(min)}m ago`;
-    if (min < 1440) {
-      const h = min / 60;
-      return h < 10 ? `${h.toFixed(1)}h ago` : `${Math.round(h)}h ago`;
-    }
-    return `${Math.round(min / 1440)}d ago`;
-  }
-
-  function renderPresets() {
-    const html = Object.entries(SCENARIOS).map(([id, sc]) =>
-      `<button class="preset" data-preset="${id}" type="button">${sc.label}</button>`
-    ).join('');
-    $('#presets').innerHTML = html;
-    $('#presets').querySelectorAll('.preset').forEach(b => {
-      b.addEventListener('click', () => applyPreset(b.dataset.preset));
-    });
-  }
-
-  function applyPreset(id) {
-    const sc = SCENARIOS[id];
-    if (!sc) return;
-    testState = {
-      ...sc.reading,
-      last_watered_min_ago: sc.last_watered_minutes_ago,
-    };
-    S.saveTestMode(testState);
-    renderTestInputs();
-    renderTestPreview();
-    // Highlight the active preset chip
-    $('#presets').querySelectorAll('.preset').forEach(b =>
-      b.classList.toggle('active', b.dataset.preset === id));
-  }
-
-  function bindSliders() {
-    document.querySelectorAll('#panel-test-mode .slider-row').forEach(row => {
-      const input = row.querySelector('input[type="range"]');
-      const key = row.dataset.key;
-      input.addEventListener('input', () => {
-        testState[key] = parseFloat(input.value);
-        S.saveTestMode(testState);
-        $('#presets').querySelectorAll('.preset.active').forEach(b => b.classList.remove('active'));
-        renderTestInputs();
-        renderTestPreview();
-      });
-    });
-    $('#reset-test').addEventListener('click', () => applyPreset('healthy'));
-  }
-
-  function renderTestInputs() {
-    document.querySelectorAll('#panel-test-mode .slider-row').forEach(row => {
-      const input = row.querySelector('input[type="range"]');
-      const valEl = row.querySelector('.srval');
-      const key = row.dataset.key;
-      const unit = row.dataset.unit || '';
-      const v = testState[key];
-      input.value = v;
-      if (key === 'light_lux') {
-        valEl.textContent = Math.round(v).toLocaleString() + unit;
-      } else if (key === 'last_watered_min_ago') {
-        valEl.textContent = fmtMinAgo(Number(v));
-      } else {
-        valEl.textContent = Math.round(v) + unit;
-      }
-    });
-  }
-
-  function renderTestPreview() {
-    const reading = buildTestReading();
-    const health = computeHealth(plant, reading);
-
-    setGauge('#test-gauge-fill', '#test-gauge-num', health.score);
-    $('#test-gauge-exp').textContent = health.explanation;
-    $('#test-summary').textContent = health.summary;
-
-    // Last watered tile
-    const min = Number(testState.last_watered_min_ago);
-    $('#test-lw').textContent = fmtMinAgo(min);
-    const lwTs = new Date(Date.now() - min * 60_000);
-    $('#test-lw-sub').textContent =
-      lwTs.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      + ' · ' + lwTs.toLocaleDateString([], { month: 'short', day: 'numeric' });
-
-    // Reservoir tile
-    const tileRes = $('#test-tile-reservoir');
-    tileRes.classList.remove('warn', 'bad');
-    const res = reading.reservoir_level;
-    $('#test-res').textContent = Math.round(res) + '%';
-    $('#test-res-bar').style.width = Math.max(0, Math.min(100, res)) + '%';
-    if (res < settings.low_reservoir_pct) tileRes.classList.add('bad');
-    else if (res < settings.low_reservoir_pct + 15) tileRes.classList.add('warn');
-
-    // Light tile
-    const lux = reading.light_lux;
-    const tileLight = $('#test-tile-light');
-    tileLight.classList.remove('warn', 'bad');
-    $('#test-light').textContent = Math.round(lux).toLocaleString() + ' lx';
-    let descr = 'Bright indirect';
-    if (lux < 3000)       { descr = 'Too dim'; tileLight.classList.add('bad'); }
-    else if (lux < 10000) { descr = 'Low light'; tileLight.classList.add('warn'); }
-    else if (lux > 100000){ descr = 'Very intense'; tileLight.classList.add('warn'); }
-    else if (lux > 50000) { descr = 'Bright sun'; }
-    else                  { descr = 'Ideal for basil'; }
-    $('#test-light-sub').textContent = descr;
-
-    // Key metrics chips
-    const keys = ['moisture_pct', 'temperature_c', 'humidity_pct', 'light_lux'];
-    $('#test-key-metrics').innerHTML = keys.map(k => {
-      const def = METRICS.find(m => m.key === k);
-      const v = reading[k];
-      const b = bucket(plant, k, v);
-      const cls = b === 'missing' ? '' : (b === 'good' ? '' : ' ' + b);
-      const formatted = fmtVal(k, v);
-      return `<div class="chip${cls}">
-        <div class="icon">${def.icon}</div>
-        <div class="ml">${def.name}</div>
-        <div class="mv">${formatted == null ? '<span class="missing">—</span>' : formatted + def.unit}</div>
-      </div>`;
-    }).join('');
-
-    // Sub-scores breakdown
-    const SUB_LABELS = {
-      moisture_pct: 'Soil moisture', temperature_c: 'Temperature',
-      humidity_pct: 'Humidity',
-      light_lux: 'Light (BH1750)', reservoir: 'Reservoir',
-    };
-    const subRows = Object.entries(health.subscores).map(([k, v]) => {
-      const w = plant.weights[k] != null ? Math.round(plant.weights[k] * 100) + '% weight' : '';
-      let cls = '';
-      if (v < 40) cls = 'bad';
-      else if (v < 70) cls = 'warn';
-      return `<div class="subscore-row ${cls}">
-        <div class="lbl">${SUB_LABELS[k] || k}<br><span style="color:var(--muted);font-size:11px">${w}</span></div>
-        <div class="bar"><span style="width:${v}%"></span></div>
-        <div class="num">${Math.round(v)}</div>
-      </div>`;
-    });
-    $('#test-subscores').innerHTML = subRows.join('');
-
-    // Alerts that would trigger
-    const alerts = [];
-    if (res < settings.low_reservoir_pct) {
-      alerts.push({ kind: 'alert', msg: `Low reservoir (${Math.round(res)}%) — refill needed` });
-    }
-    const wouldAutoWater = reading.moisture_pct < settings.moisture_threshold_pct
-                          && res >= settings.low_reservoir_pct;
-    if (wouldAutoWater) {
-      alerts.push({ kind: 'watering', msg:
-        `Would auto-water now (moisture ${Math.round(reading.moisture_pct)}% < threshold ${settings.moisture_threshold_pct}%)` });
-    }
-    if (reading.moisture_pct < settings.moisture_threshold_pct
-        && res < settings.low_reservoir_pct) {
-      alerts.push({ kind: 'alert', msg: 'Watering needed but reservoir is empty — refill before watering can resume' });
-    }
-    if (reading.temperature_c < plant.ranges.temperature_c.ok[0]) {
-      alerts.push({ kind: 'alert', msg: `Temperature ${reading.temperature_c.toFixed(1)}°C is below the safe range` });
-    }
-    if (reading.temperature_c > plant.ranges.temperature_c.ok[1]) {
-      alerts.push({ kind: 'alert', msg: `Temperature ${reading.temperature_c.toFixed(1)}°C is above the safe range` });
-    }
-    if (alerts.length === 0) {
-      $('#test-alerts').innerHTML = `<div class="empty">No alerts at these values</div>`;
-    } else {
-      $('#test-alerts').innerHTML = alerts.map(a => {
-        const icoCls = a.kind === 'alert' ? 'alert' : '';
-        const iconSvg = a.kind === 'watering'
-          ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s-6 7-6 12a6 6 0 0 0 12 0c0-5-6-12-6-12z"/></svg>'
-          : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>';
-        return `<div class="event">
-          <div class="left">
-            <div class="ico ${icoCls}">${iconSvg}</div>
-            <div class="msg">${a.msg}</div>
-          </div>
-        </div>`;
-      }).join('');
-    }
-  }
-
-  function renderTestMode() {
-    renderTestInputs();
-    renderTestPreview();
-  }
 
   // ------------------------------------------------------------------------
   // RECIPES + SHOPPING (sub-view)
@@ -1166,9 +1046,6 @@
   $('#shopping-btn').addEventListener('click', goToShopping);
   $('#back-to-recipe').addEventListener('click', returnToRecipe);
 
-  renderPresets();
-  bindSliders();
-
   // First paint
   S.ensurePlantedDate(plant.id);
   renderSettings();
@@ -1176,6 +1053,5 @@
   renderHistory();
   renderRecipes();
   render();
-  renderTestMode();
   setInterval(tick, 1000);
 })();
