@@ -287,16 +287,11 @@
     const source = plantSource === 'mature' ? 'mature' : 'seeds';
 
     if (source === 'mature') {
-      const window = plant.harvest_window_days || [0, 120];
-      const settled = days >= 7;
-      const stage = settled ? 'Established' : 'Settling in';
-      const recommendation = settled
-        ? 'Ready to harvest. Pick a few outer / top leaves at a time to keep it productive.'
-        : 'Let it settle into its new spot — light watering, no major harvest yet.';
+      // Shop-bought plants are already mature — harvest-ready from day 1.
       return {
         days,
-        stage,
-        recommendation,
+        stage: 'Ready to harvest',
+        recommendation: 'Shop-bought and already mature — pick a few outer or top leaves at a time and use them straight away. Regular light picking keeps the plant productive.',
         harvestReady: true,
         source,
         progressPct: 100,

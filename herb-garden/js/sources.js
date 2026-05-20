@@ -13,12 +13,11 @@
  *     light_lux, reservoir_level, pump_event, pump_status }
  *
  * Source roles:
- *   BackendSource    - primary live channel. Talks to the local Flask
- *                      backend which owns the Adafruit IO key.
- *   LiveMockSource   - default fallback when the backend is unreachable.
- *   SerialSource     - optional USB debug channel. Same JSON-per-line
- *                      schema as before; the firmware exposes it on
- *                      usb_cdc.data.
+ *   AdafruitIOSource - primary live channel. Polls io.adafruit.com REST
+ *                      directly from the browser; credentials are entered
+ *                      by the user in Settings and held in localStorage.
+ *   LiveMockSource   - default fallback when AIO isn't configured.
+ *   SerialSource     - optional USB debug channel.
  */
 (function (root) {
 
@@ -39,8 +38,6 @@
     return n;
   }
 
-  // Accept ISO 8601 with either "Z" or numeric offset. Anything that fails
-  // to parse comes back as null so the UI can fall back to receipt time.
   function safeIso(v) {
     if (v == null || v === '') return null;
     const d = new Date(v);
@@ -50,12 +47,10 @@
 
   function normalize(raw) {
     const ts = safeIso(raw.timestamp);
-    // The firmware emits an explicit time_valid boolean over serial; over
-    // AIO it's true whenever the backend reports a usable created_at.
     let timeValid = raw.time_valid;
     if (timeValid == null) timeValid = ts != null;
     return {
-      timestamp: ts,                 // null = device clock not usable
+      timestamp: ts,
       time_valid: !!timeValid,
       moisture_pct:    clean('moisture_pct',    raw.moisture_pct    ?? raw.moisture),
       temperature_c:   clean('temperature_c',   raw.temperature_c   ?? raw.temperature),
@@ -68,9 +63,7 @@
   }
 
   // -------------------------------------------------------------------------
-  // LiveMockSource — believable drift. Moisture trickles down so the auto-
-  // water threshold actually fires. Used as a fallback when the backend
-  // isn't running yet, and as the standalone Demo source.
+  // LiveMockSource — believable drift. Default fallback when AIO isn't set.
   // -------------------------------------------------------------------------
   class LiveMockSource {
     constructor(intervalMs = 1000) {
@@ -123,86 +116,95 @@
   }
 
   // -------------------------------------------------------------------------
-  // BackendSource — primary live channel. Polls a local Flask backend that
-  // owns the Adafruit IO key. The AIO key is NEVER exposed to this frontend.
-  //
-  // Endpoints used (served by herb-garden/backend/app.py):
-  //   GET  /api/telemetry         -> latest reading from all AIO feeds
-  //   POST /api/water             -> { duration_ms } => writes water:<ms>
-  //   POST /api/selected-herb     -> { herb }        => writes herb id
-  //   GET  /api/health            -> { configured, feeds }
+  // AdafruitIOSource — direct HTTP REST polling against io.adafruit.com.
+  // The user enters their username and key in Settings; both are stored in
+  // localStorage. This is the primary live channel.
   // -------------------------------------------------------------------------
-  class BackendSource {
-    constructor(config = {}) {
-      this._baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
+  class AdafruitIOSource {
+    constructor(config) {
+      this.username = (config.username || '').trim();
+      this.key = (config.key || '').trim();
+      this.feeds = config.feeds || {};
       this._pollMs = config.pollIntervalMs || 10_000;     // 10 s default
       this._staleAfter = config.staleAfterMs || 30_000;   // 30 s = stale
       this._timer = null;
       this._reading = null;
       this._lastSyncTs = 0;
       this._lastError = null;
-      this._configured = null;
       this._connected = false;
       this._inFlight = false;
-      this.sourceLabel = 'Adafruit IO (via backend)';
+      this.sourceLabel = 'Adafruit IO';
       this.allowAutoWater = true;
     }
-
-    _url(path) { return this._baseUrl + path; }
-
+    isConfigured() {
+      return Boolean(this.username && this.key);
+    }
+    _url(feedKey) {
+      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
+             `/feeds/${encodeURIComponent(feedKey)}/data/last`;
+    }
+    _cmdUrl(feedKey) {
+      return `https://io.adafruit.com/api/v2/${encodeURIComponent(this.username)}` +
+             `/feeds/${encodeURIComponent(feedKey)}/data`;
+    }
+    async _fetchLast(feedKey) {
+      if (!feedKey) return null;
+      try {
+        const r = await fetch(this._url(feedKey), {
+          headers: { 'X-AIO-Key': this.key, 'Accept': 'application/json' },
+          cache: 'no-store',
+        });
+        if (r.status === 404) return null;  // feed doesn't exist yet
+        if (!r.ok) throw new Error(`AIO ${feedKey}: HTTP ${r.status}`);
+        return await r.json();
+      } catch (e) {
+        this._lastError = e.message || String(e);
+        return null;
+      }
+    }
     async _pollOnce() {
       if (this._inFlight) return;
       this._inFlight = true;
       try {
-        const r = await fetch(this._url('/api/telemetry'), {
-          headers: { 'Accept': 'application/json' },
-          cache: 'no-store',
-        });
-        // 503 = backend running but missing AIO credentials.
-        if (r.status === 503) {
-          const body = await r.json().catch(() => ({}));
-          this._configured = false;
-          this._lastError = body.error || 'Backend missing AIO credentials';
+        const f = this.feeds;
+        const [m, t, h, l, r, p] = await Promise.all([
+          this._fetchLast(f.moisture),
+          this._fetchLast(f.temperature),
+          this._fetchLast(f.humidity),
+          this._fetchLast(f.light),
+          this._fetchLast(f.reservoir),
+          this._fetchLast(f.pump_status),
+        ]);
+        if (!m && !t && !h && !l && !r && !p && !this._reading) {
           this._connected = false;
           return;
         }
-        if (!r.ok) {
-          this._lastError = `Backend HTTP ${r.status}`;
-          this._connected = false;
-          return;
-        }
-        const data = await r.json();
-        this._configured = data.configured !== false;
-        this._reading = normalize({
-          timestamp:       data.timestamp,
-          time_valid:      data.time_valid,
-          moisture_pct:    data.moisture_pct,
-          temperature_c:   data.temperature_c,
-          humidity_pct:    data.humidity_pct,
-          light_lux:       data.light_lux,
-          reservoir_level: data.reservoir_level,
-          pump_status:     data.pump_status,
-          // Translate the firmware's pump_status string into the
-          // pump_event the rest of the app's UI already understands.
-          pump_event: typeof data.pump_status === 'string' &&
-                      /complete|done|ok/i.test(data.pump_status)
-                      ? 'completed' : null,
-        });
+        const latest = newest([m, t, h, l, r, p]);
+        const pumpVal = p ? String(p.value) : null;
+        const raw = {
+          timestamp:       latest ? latest.created_at : null,
+          time_valid:      latest != null,
+          moisture_pct:    m ? m.value : null,
+          temperature_c:   t ? t.value : null,
+          humidity_pct:    h ? h.value : null,
+          light_lux:       l ? l.value : null,
+          reservoir_level: r ? r.value : null,
+          pump_status:     pumpVal,
+          pump_event:      pumpVal && /complete|done|ok/i.test(pumpVal) ? 'completed' : null,
+        };
+        this._reading = normalize(raw);
         this._lastSyncTs = Date.now();
         this._connected = true;
-        this._lastError = (data.feed_errors && Object.keys(data.feed_errors).length)
-          ? `Feed errors: ${Object.keys(data.feed_errors).join(', ')}`
-          : null;
-      } catch (e) {
-        // Backend not running, network error, CORS, etc.
-        this._lastError = e.message || String(e);
-        this._connected = false;
+        this._lastError = null;
       } finally {
         this._inFlight = false;
       }
     }
-
     start() {
+      if (!this.isConfigured()) {
+        this._lastError = 'Adafruit IO username and key required';
+        return;
+      }
       if (this._timer) return;
       this._pollOnce();
       this._timer = setInterval(() => this._pollOnce(), this._pollMs);
@@ -212,18 +214,21 @@
       this._connected = false;
     }
     getLatest() { return this._reading; }
-
     async sendCommand(cmd) {
       if (!cmd || cmd.cmd !== 'water') return;
-      // Throw on failure so the UI can show a clear error. The caller is
-      // responsible for catching; a fire-and-forget caller can attach
-      // .catch(...). Single POST per call — no retries here.
+      const feed = this.feeds.water_command;
+      if (!feed) throw new Error('water_command feed not configured');
+      const value = `water:${cmd.duration_ms || 3000}`;
       let r;
       try {
-        r = await fetch(this._url('/api/water'), {
+        r = await fetch(this._cmdUrl(feed), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ duration_ms: cmd.duration_ms || 3000 }),
+          headers: {
+            'X-AIO-Key': this.key,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ value }),
         });
       } catch (e) {
         this._lastError = e.message || String(e);
@@ -231,37 +236,42 @@
       }
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
-        const msg = body.error || `Water POST HTTP ${r.status}`;
+        const msg = (body && body.error) || `AIO POST HTTP ${r.status}`;
         this._lastError = msg;
         throw new Error(msg);
       }
       this._lastError = null;
     }
-
-    async publishSelectedHerb(herb) {
-      if (!herb) return;
+    async publishSelectedHerb(plantId) {
+      const feed = this.feeds.selected_herb;
+      if (!feed || !this.isConfigured()) return;
       try {
-        await fetch(this._url('/api/selected-herb'), {
+        await fetch(this._cmdUrl(feed), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ herb }),
+          headers: { 'X-AIO-Key': this.key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: plantId }),
         });
       } catch (_) { /* best-effort */ }
     }
-
     isConnected() { return this._connected && !this.isStale(); }
     isStale() {
       return this._lastSyncTs > 0 && (Date.now() - this._lastSyncTs) > this._staleAfter;
     }
     lastSyncMs() { return this._lastSyncTs; }
     lastError()  { return this._lastError; }
-    isConfigured() { return this._configured !== false; }
+  }
+
+  function newest(items) {
+    let best = null;
+    for (const it of items) {
+      if (!it || !it.created_at) continue;
+      if (!best || it.created_at > best.created_at) best = it;
+    }
+    return best;
   }
 
   // -------------------------------------------------------------------------
-  // SerialSource — optional USB debug channel. Reads JSON-per-line frames
-  // from the firmware's usb_cdc.data port; writes commands as JSON+newline.
-  // Stub if the Web Serial API isn't available.
+  // SerialSource — optional USB debug channel. Same JSON-per-line schema.
   // -------------------------------------------------------------------------
   class SerialSource {
     constructor(staleAfterMs = 30_000) {
@@ -270,7 +280,7 @@
       this._lastUpdate = 0; this._connected = false;
       this._staleAfter = staleAfterMs;
       this.sourceLabel = 'Serial (debug)';
-      this.allowAutoWater = false;   // debug channel — let the cloud drive
+      this.allowAutoWater = false;
     }
     static isSupported() { return 'serial' in navigator; }
     async connect() {
@@ -321,7 +331,7 @@
       const enc = new TextEncoder();
       this._writer.write(enc.encode(JSON.stringify(cmd) + '\n')).catch(() => {});
     }
-    async publishSelectedHerb(_) { /* serial: no separate selected-herb channel */ }
+    async publishSelectedHerb(_) { /* serial has no separate herb channel */ }
     isConnected() { return this._connected && !this.isStale(); }
     isStale() {
       return this._connected
@@ -332,6 +342,6 @@
   }
 
   root.HerbSources = {
-    LiveMockSource, SerialSource, BackendSource, normalize,
+    LiveMockSource, SerialSource, AdafruitIOSource, normalize,
   };
 })(window);
