@@ -771,6 +771,7 @@
       if (t === 'settings') renderSettings();
       if (t === 'live') render();
       if (t === 'recipes') renderRecipes();
+      if (t === 'demo')    renderDemo();
       // Shopping is a sub-view of Recipes; never reached via tab.
       // Re-render conn so the demo banner shows/hides per tab
       const r = source.getLatest();
@@ -1046,12 +1047,199 @@
   $('#shopping-btn').addEventListener('click', goToShopping);
   $('#back-to-recipe').addEventListener('click', returnToRecipe);
 
+  // ------------------------------------------------------------------------
+  // DEMO — guided walkthrough of the auto-water workflow.
+  //
+  // The Demo tab's moisture value is driven entirely by this state machine;
+  // it does NOT reflect the live sensor. The ONE real action is the
+  // water:8000 POST to Adafruit IO when moisture crosses 35%. Everything
+  // else — the moisture animation, the plant-health gauge, the recovery
+  // curve — is synthesised for visual demonstration only.
+  // ------------------------------------------------------------------------
+  const DEMO_TICK_MS = 500;
+  const DEMO_START_MOISTURE   = 37;
+  const DEMO_TRIGGER_BELOW    = 35;
+  const DEMO_RECOVERY_TARGET  = 65;
+  const DEMO_DRY_PER_TICK     = 0.6;
+  const DEMO_WATER_PER_TICK   = 0.8;
+  const DEMO_WATER_DURATION_MS = 8000;
+
+  const demoState = {
+    phase: 'idle',            // 'idle' | 'drying' | 'watering' | 'complete'
+    moisture: DEMO_START_MOISTURE,
+    timer: null,
+    aioStatus: null,          // { ok: bool, reason?: string } from the AIO POST
+  };
+
+  // Always reach Adafruit IO when AIO creds are saved — even if the active
+  // data source is mock or serial — so the demo demonstrates the real
+  // device reacting. If creds aren't saved, return a status so the toast
+  // can explain why no real command went out.
+  async function sendDemoWaterToAio() {
+    const duration = DEMO_WATER_DURATION_MS;
+    if (source instanceof AdafruitIOSource && source.isConfigured()) {
+      try {
+        await source.sendCommand({ cmd: 'water', duration_ms: duration });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, reason: e.message || String(e) };
+      }
+    }
+    const u = (settings.aio_username || '').trim();
+    const k = (settings.aio_key || '').trim();
+    const feed = (settings.aio_feeds && settings.aio_feeds.water_command) || 'water-command';
+    if (!u || !k) {
+      return { ok: false, reason: 'No Adafruit IO credentials saved — enter them in Settings → Connection to send the real command.' };
+    }
+    const url = `https://io.adafruit.com/api/v2/${encodeURIComponent(u)}/feeds/${encodeURIComponent(feed)}/data`;
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-AIO-Key': k, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: `water:${duration}` }),
+      });
+      if (!r.ok) return { ok: false, reason: `Adafruit IO returned HTTP ${r.status}` };
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, reason: e.message || String(e) };
+    }
+  }
+
+  function demoStartIfIdle() {
+    if (demoState.phase !== 'idle' && demoState.phase !== 'complete') return;
+    demoState.phase = 'drying';
+    demoState.moisture = DEMO_START_MOISTURE;
+    demoState.aioStatus = null;
+    hideDemoToast();
+    if (demoState.timer) clearInterval(demoState.timer);
+    demoState.timer = setInterval(demoTick, DEMO_TICK_MS);
+    renderDemo();
+  }
+
+  function demoReset() {
+    if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
+    demoState.phase = 'idle';
+    demoState.moisture = DEMO_START_MOISTURE;
+    demoState.aioStatus = null;
+    hideDemoToast();
+    renderDemo();
+  }
+
+  function demoTick() {
+    if (demoState.phase === 'drying') {
+      demoState.moisture = Math.max(0, demoState.moisture - DEMO_DRY_PER_TICK);
+      if (demoState.moisture < DEMO_TRIGGER_BELOW) {
+        // Cross the threshold once. Flip to watering immediately so the
+        // tick doesn't fire the AIO POST twice; the real send is awaited
+        // in the background and its status feeds the final toast.
+        demoState.phase = 'watering';
+        sendDemoWaterToAio().then(status => { demoState.aioStatus = status; });
+      }
+    } else if (demoState.phase === 'watering') {
+      demoState.moisture = Math.min(100, demoState.moisture + DEMO_WATER_PER_TICK);
+      if (demoState.moisture >= DEMO_RECOVERY_TARGET) {
+        demoState.phase = 'complete';
+        if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
+        showDemoToast();
+      }
+    }
+    renderDemo();
+  }
+
+  function showDemoToast() {
+    const toast = $('#demo-toast');
+    if (!toast) return;
+    $('#demo-toast-title').textContent =
+      'Moisture Level Low, Automatic Watering Complete.';
+    const sub = $('#demo-toast-sub');
+    if (demoState.aioStatus && demoState.aioStatus.ok) {
+      sub.textContent = `water:${DEMO_WATER_DURATION_MS} posted to Adafruit IO.`;
+    } else if (demoState.aioStatus && demoState.aioStatus.reason) {
+      sub.textContent = `Visual demo only — ${demoState.aioStatus.reason}`;
+    } else {
+      sub.textContent = '';
+    }
+    toast.hidden = false;
+  }
+  function hideDemoToast() {
+    const toast = $('#demo-toast');
+    if (toast) toast.hidden = true;
+  }
+
+  function demoStageLabel() {
+    return ({
+      idle:     'Press Start Demo to begin',
+      drying:   'Moisture is dropping — auto-water threshold is 35%',
+      watering: 'Water command sent — moisture recovering',
+      complete: 'Demo complete — Reset to run again',
+    })[demoState.phase] || '';
+  }
+
+  function renderDemo() {
+    const m = demoState.moisture;
+    const moistureEl = $('#demo-moisture-value');
+    const fillEl     = $('#demo-moisture-fill');
+    if (moistureEl) {
+      moistureEl.textContent = m.toFixed(1) + '%';
+      moistureEl.classList.toggle('warning', m < 40 && m >= 30);
+      moistureEl.classList.toggle('danger',  m < 30);
+    }
+    if (fillEl) {
+      fillEl.style.width = Math.max(0, Math.min(100, m)) + '%';
+      fillEl.classList.toggle('warning', m < 40 && m >= 30);
+      fillEl.classList.toggle('danger',  m < 30);
+    }
+    $('#demo-stage').textContent = demoStageLabel();
+
+    // Plant Health gauge — the demo only varies moisture, so the other
+    // sub-scores stay at "all readings at ideal" so the gauge tracks the
+    // moisture swing without other noise.
+    const reading = {
+      timestamp: new Date().toISOString(),
+      time_valid: true,
+      moisture_pct: m,
+      temperature_c: 22.0,
+      humidity_pct: 50.0,
+      light_lux: 22000,
+      reservoir_level: 85,
+      pump_event: null,
+      pump_status: demoState.phase === 'watering' ? 'running' : 'idle',
+    };
+    const health = computeHealth(_activePlant, reading);
+    setGauge('#demo-gauge-fill', '#demo-gauge-num', health.score);
+    $('#demo-gauge-exp').textContent = demoState.phase === 'idle'
+      ? 'Awaiting demo start'
+      : health.explanation;
+
+    // Buttons
+    const startBtn = $('#demo-start');
+    const resetBtn = $('#demo-reset');
+    if (startBtn && resetBtn) {
+      const running = demoState.phase === 'drying' || demoState.phase === 'watering';
+      startBtn.disabled = running;
+      startBtn.textContent = demoState.phase === 'complete' ? 'Run Demo Again' : 'Start Demo';
+      resetBtn.hidden = demoState.phase === 'idle';
+    }
+
+    // Hero illustration uses the canonical basil illustration regardless
+    // of which herb the user has selected elsewhere — the demo is fixed
+    // to basil for a predictable narrative.
+    const art = $('#demo-art');
+    if (art && !art.hasChildNodes()) {
+      art.innerHTML = ILLUSTRATIONS.basil;
+    }
+  }
+
+  $('#demo-start').addEventListener('click', demoStartIfIdle);
+  $('#demo-reset').addEventListener('click', demoReset);
+
   // First paint
   S.ensurePlantedDate(plant.id);
   renderSettings();
   renderProfile();
   renderHistory();
   renderRecipes();
+  renderDemo();
   render();
   setInterval(tick, 1000);
 })();

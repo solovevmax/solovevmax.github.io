@@ -121,6 +121,13 @@
         </svg>
         Alerts
       </button>
+      <button class="tab" data-tab="demo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M10 8.5l5 3.5-5 3.5z" fill="currentColor" stroke="none"/>
+        </svg>
+        Demo
+      </button>
     </div>
   </nav>
 
@@ -497,6 +504,75 @@
     <section class="panel" id="panel-alerts">
       <h2>Alerts</h2>
       <div class="events" id="all-alerts"></div>
+    </section>
+
+    <!-- DEMO — guided walkthrough of the auto-water workflow. The moisture
+         on this page is driven entirely by the demo state machine; it
+         does NOT reflect the live sensor. The only real action is the
+         water:8000 POST to Adafruit IO when moisture crosses 35%. -->
+    <section class="panel" id="panel-demo">
+      <h2>Demo</h2>
+      <p class="demo-intro">
+        Press <strong>Start Demo</strong> and watch the auto-water workflow
+        play out: moisture drifts down from 37%, crosses the 35% threshold,
+        the app posts <code>water:8000</code> to your Adafruit IO water-command
+        feed, and the moisture recovers toward a healthy level.
+      </p>
+
+      <div class="demo-toast" id="demo-toast" hidden role="status" aria-live="polite">
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12l4 4 10-10"/>
+          </svg>
+        </span>
+        <div class="body">
+          <div class="title" id="demo-toast-title">—</div>
+          <div class="sub" id="demo-toast-sub"></div>
+        </div>
+      </div>
+
+      <div class="demo-grid">
+        <div class="hero demo-hero">
+          <div class="hero-art" id="demo-art"></div>
+          <h1>Basil</h1>
+          <p class="sci">Ocimum basilicum</p>
+          <div class="status-summary">
+            <span aria-hidden="true">🌿</span>
+            <span id="demo-stage">Press Start Demo to begin</span>
+          </div>
+        </div>
+
+        <div class="right-col">
+          <div class="card demo-moisture-card">
+            <p class="card-title">Soil moisture</p>
+            <div class="demo-moisture-value" id="demo-moisture-value">--%</div>
+            <div class="demo-moisture-bar">
+              <span class="demo-moisture-fill" id="demo-moisture-fill"></span>
+              <span class="demo-moisture-threshold" aria-label="Auto-water threshold at 35 percent"></span>
+            </div>
+            <p class="demo-moisture-hint">Auto-water triggers below <strong>35%</strong></p>
+          </div>
+
+          <div class="card gauge-card demo-gauge-card">
+            <p class="card-title">Plant Health</p>
+            <div class="gauge-wrap">
+              <svg class="gauge-svg" viewBox="0 0 300 180">
+                <path class="gauge-track" d="M 40 150 A 110 110 0 0 1 260 150"/>
+                <path id="demo-gauge-fill" class="gauge-fill" d="M 40 150 A 110 110 0 0 1 260 150"/>
+              </svg>
+              <div class="gauge-readout">
+                <div><span class="gauge-number" id="demo-gauge-num">--</span><span class="gauge-suffix"> /100</span></div>
+              </div>
+            </div>
+            <p class="gauge-explanation" id="demo-gauge-exp">Awaiting demo start</p>
+          </div>
+
+          <div class="demo-actions">
+            <button class="btn" id="demo-start" type="button">Start Demo</button>
+            <button class="btn ghost" id="demo-reset" type="button" hidden>Reset Demo</button>
+          </div>
+        </div>
+      </div>
     </section>
 
   </main>

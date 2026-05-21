@@ -1373,3 +1373,153 @@ body.night-mode .metric-card .range-strip > .indicator { background: var(--ink);
 
 /* Watering-feedback success colour reads better as bright lime on dark. */
 body.night-mode .water-feedback.ok { color: var(--lime); }
+
+/* ============================================================
+   Demo tab — guided walkthrough of the auto-water workflow.
+   Layout mirrors Home (hero + right column) so the user
+   instantly recognises the screen.
+   ============================================================ */
+
+.demo-intro {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+  margin: 0 0 16px;
+  max-width: 60ch;
+}
+.demo-intro code {
+  background: var(--bg-tint);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+}
+
+/* Notification banner shown when the auto-water cycle completes. */
+.demo-toast {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--lime-soft);
+  border: 1px solid var(--lime);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  font-size: 14px;
+  animation: demo-toast-in 360ms ease;
+}
+.demo-toast[hidden] { display: none; }
+.demo-toast .ico {
+  width: 28px; height: 28px;
+  background: var(--lime);
+  color: var(--ink);
+  border-radius: 8px;
+  display: grid; place-items: center;
+  flex-shrink: 0;
+}
+.demo-toast .body { flex: 1; min-width: 0; }
+.demo-toast .body .title { font-weight: 600; line-height: 1.3; }
+.demo-toast .body .sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+@keyframes demo-toast-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Layout mirrors .home-grid so the Demo screen reads as a sibling of
+   Home rather than a separate UI. */
+.demo-grid {
+  display: grid;
+  gap: 16px;
+}
+@media (min-width: 720px) {
+  .demo-grid {
+    grid-template-columns: 1.05fr 1fr;
+    align-items: start;
+  }
+}
+.demo-hero {
+  /* Reuse the Home .hero styling directly. */
+}
+
+/* Big moisture readout — the key indicator the user is asked to watch. */
+.demo-moisture-card { text-align: center; padding: 24px 22px 22px; }
+.demo-moisture-value {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 72px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  margin: 6px 0 16px;
+  transition: color 280ms ease;
+}
+.demo-moisture-value.warning { color: var(--warn); }
+.demo-moisture-value.danger  { color: var(--bad); }
+
+/* Horizontal bar with a 35% threshold marker. */
+.demo-moisture-bar {
+  position: relative;
+  height: 14px;
+  background: var(--bg-tint);
+  border-radius: 999px;
+  margin: 8px 8px 18px;
+  border: 1px solid var(--hairline);
+}
+.demo-moisture-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--lime-deep);
+  border-radius: 999px;
+  transition: width 380ms ease-out, background 300ms ease;
+}
+.demo-moisture-fill.warning { background: var(--warn); }
+.demo-moisture-fill.danger  { background: var(--bad); }
+.demo-moisture-threshold {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 35%;
+  width: 2px;
+  background: var(--ink);
+  opacity: .55;
+  border-radius: 1px;
+}
+.demo-moisture-threshold::after {
+  content: "35%";
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.demo-moisture-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.demo-gauge-card { text-align: center; }
+
+.demo-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.demo-actions .btn { min-width: 140px; }
+
+/* Night-mode tweaks for the demo screen. */
+body.night-mode .demo-moisture-bar { border-color: var(--hairline); }
+body.night-mode .demo-toast {
+  background: var(--card);
+  border-color: var(--lime);
+  color: var(--ink);
+}
+body.night-mode .demo-toast .ico {
+  background: var(--lime);
+  color: #0D0E0B;
+}
