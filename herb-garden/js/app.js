@@ -1071,79 +1071,120 @@
     aioStatus: null,          // { ok: bool, reason?: string } from the AIO POST
   };
 
-  // Always reach Adafruit IO when AIO creds are saved — even if the active
-  // data source is mock or serial — so the demo demonstrates the real
-  // device reacting. If creds aren't saved, return a status so the toast
-  // can explain why no real command went out.
+  // POST water:DURATION to Adafruit IO, regardless of which source is
+  // currently active. Always uses the saved username + key from settings.
+  //
+  // CORS shape matters: the X-AIO-Key header plus an application/json
+  // body together trigger a browser preflight that AIO's edge can
+  // reject silently on some networks. The shape below is a "simple"
+  // CORS request — no custom headers, content-type is
+  // application/x-www-form-urlencoded, key goes in the query string —
+  // so it skips the preflight entirely.
   async function sendDemoWaterToAio() {
-    const duration = DEMO_WATER_DURATION_MS;
-    if (source instanceof AdafruitIOSource && source.isConfigured()) {
-      try {
-        await source.sendCommand({ cmd: 'water', duration_ms: duration });
-        return { ok: true };
-      } catch (e) {
-        return { ok: false, reason: e.message || String(e) };
-      }
-    }
     const u = (settings.aio_username || '').trim();
     const k = (settings.aio_key || '').trim();
     const feed = (settings.aio_feeds && settings.aio_feeds.water_command) || 'water-command';
     if (!u || !k) {
       return { ok: false, reason: 'No Adafruit IO credentials saved — enter them in Settings → Connection to send the real command.' };
     }
-    const url = `https://io.adafruit.com/api/v2/${encodeURIComponent(u)}/feeds/${encodeURIComponent(feed)}/data`;
+    const value = `water:${DEMO_WATER_DURATION_MS}`;
+    const url = `https://io.adafruit.com/api/v2/${encodeURIComponent(u)}` +
+                `/feeds/${encodeURIComponent(feed)}/data` +
+                `?x-aio-key=${encodeURIComponent(k)}`;
+    const body = new URLSearchParams({ value }).toString();
     try {
+      console.log('[sps demo] POST →', url.replace(/x-aio-key=[^&]+/, 'x-aio-key=***'));
       const r = await fetch(url, {
         method: 'POST',
-        headers: { 'X-AIO-Key': k, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: `water:${duration}` }),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
       });
-      if (!r.ok) return { ok: false, reason: `Adafruit IO returned HTTP ${r.status}` };
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        const trimmed = (txt || '').slice(0, 120);
+        console.warn('[sps demo] AIO non-2xx:', r.status, trimmed);
+        return { ok: false, reason: `Adafruit IO returned HTTP ${r.status}${trimmed ? ' — ' + trimmed : ''}` };
+      }
+      console.log('[sps demo] AIO POST ok');
       return { ok: true };
     } catch (e) {
+      console.error('[sps demo] AIO POST failed:', e);
       return { ok: false, reason: e.message || String(e) };
     }
   }
 
+  // Small status line under the demo buttons — gives the user immediate
+  // visual confirmation that something happened, separately from the
+  // toast that only appears at the end of the cycle.
+  function setDemoPostStatus(msg, level /* 'info' | 'ok' | 'error' */) {
+    const el = $('#demo-post-status');
+    if (!el) return;
+    el.classList.remove('info', 'ok', 'error');
+    if (level) el.classList.add(level);
+    el.textContent = msg || '';
+  }
+
   function demoStartIfIdle() {
+    console.log('[sps demo] Start pressed, current phase =', demoState.phase);
     if (demoState.phase !== 'idle' && demoState.phase !== 'complete') return;
-    demoState.phase = 'drying';
-    demoState.moisture = DEMO_START_MOISTURE;
-    demoState.aioStatus = null;
-    hideDemoToast();
-    if (demoState.timer) clearInterval(demoState.timer);
-    demoState.timer = setInterval(demoTick, DEMO_TICK_MS);
-    renderDemo();
+    try {
+      demoState.phase = 'drying';
+      demoState.moisture = DEMO_START_MOISTURE;
+      demoState.aioStatus = null;
+      hideDemoToast();
+      setDemoPostStatus('Demo running — moisture dropping toward 35%…', 'info');
+      if (demoState.timer) clearInterval(demoState.timer);
+      demoState.timer = setInterval(demoTick, DEMO_TICK_MS);
+      renderDemo();
+    } catch (e) {
+      console.error('[sps demo] Start failed:', e);
+      setDemoPostStatus(`Couldn't start the demo: ${e.message || e}`, 'error');
+    }
   }
 
   function demoReset() {
+    console.log('[sps demo] Reset pressed');
     if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
     demoState.phase = 'idle';
     demoState.moisture = DEMO_START_MOISTURE;
     demoState.aioStatus = null;
     hideDemoToast();
+    setDemoPostStatus('', null);
     renderDemo();
   }
 
   function demoTick() {
-    if (demoState.phase === 'drying') {
-      demoState.moisture = Math.max(0, demoState.moisture - DEMO_DRY_PER_TICK);
-      if (demoState.moisture < DEMO_TRIGGER_BELOW) {
-        // Cross the threshold once. Flip to watering immediately so the
-        // tick doesn't fire the AIO POST twice; the real send is awaited
-        // in the background and its status feeds the final toast.
-        demoState.phase = 'watering';
-        sendDemoWaterToAio().then(status => { demoState.aioStatus = status; });
+    try {
+      if (demoState.phase === 'drying') {
+        demoState.moisture = Math.max(0, demoState.moisture - DEMO_DRY_PER_TICK);
+        if (demoState.moisture < DEMO_TRIGGER_BELOW) {
+          // Cross the threshold exactly once. Flip phase BEFORE awaiting
+          // the POST so the next tick can't also trip the threshold.
+          demoState.phase = 'watering';
+          setDemoPostStatus('Sending water:8000 to Adafruit IO…', 'info');
+          sendDemoWaterToAio().then(status => {
+            demoState.aioStatus = status;
+            if (status.ok) {
+              setDemoPostStatus('water:8000 posted to Adafruit IO ✓', 'ok');
+            } else {
+              setDemoPostStatus(`AIO send failed: ${status.reason}`, 'error');
+            }
+          });
+        }
+      } else if (demoState.phase === 'watering') {
+        demoState.moisture = Math.min(100, demoState.moisture + DEMO_WATER_PER_TICK);
+        if (demoState.moisture >= DEMO_RECOVERY_TARGET) {
+          demoState.phase = 'complete';
+          if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
+          showDemoToast();
+        }
       }
-    } else if (demoState.phase === 'watering') {
-      demoState.moisture = Math.min(100, demoState.moisture + DEMO_WATER_PER_TICK);
-      if (demoState.moisture >= DEMO_RECOVERY_TARGET) {
-        demoState.phase = 'complete';
-        if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
-        showDemoToast();
-      }
+      renderDemo();
+    } catch (e) {
+      console.error('[sps demo] tick failed:', e);
+      if (demoState.timer) { clearInterval(demoState.timer); demoState.timer = null; }
+      setDemoPostStatus(`Demo tick failed: ${e.message || e}`, 'error');
     }
-    renderDemo();
   }
 
   function showDemoToast() {
@@ -1230,8 +1271,20 @@
     }
   }
 
-  $('#demo-start').addEventListener('click', demoStartIfIdle);
-  $('#demo-reset').addEventListener('click', demoReset);
+  // Defensive wrappers — any error inside the demo lifecycle gets
+  // surfaced as a visible status line plus a console log, so a real
+  // browser bug never leaves the user staring at a frozen panel.
+  $('#demo-start').addEventListener('click', () => {
+    try { demoStartIfIdle(); }
+    catch (e) {
+      console.error('[sps demo] Start handler threw:', e);
+      setDemoPostStatus(`Demo failed to start: ${e.message || e}`, 'error');
+    }
+  });
+  $('#demo-reset').addEventListener('click', () => {
+    try { demoReset(); }
+    catch (e) { console.error('[sps demo] Reset handler threw:', e); }
+  });
 
   // First paint
   S.ensurePlantedDate(plant.id);

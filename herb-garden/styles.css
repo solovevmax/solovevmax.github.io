@@ -1512,6 +1512,22 @@ body.night-mode .water-feedback.ok { color: var(--lime); }
 }
 .demo-actions .btn { min-width: 140px; }
 
+/* Live status under the demo buttons. Tells the user that the click
+   registered and reports whether the AIO POST succeeded. */
+.demo-post-status {
+  margin: 10px auto 0;
+  min-height: 1.2em;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+  transition: color 200ms ease;
+  font-variant-numeric: tabular-nums;
+}
+.demo-post-status.info  { color: var(--ink-2); }
+.demo-post-status.ok    { color: var(--lime-deep); }
+.demo-post-status.error { color: var(--bad); }
+body.night-mode .demo-post-status.ok { color: var(--lime); }
+
 /* Night-mode tweaks for the demo screen. */
 body.night-mode .demo-moisture-bar { border-color: var(--hairline); }
 body.night-mode .demo-toast {
